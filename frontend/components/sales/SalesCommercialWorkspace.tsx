@@ -167,7 +167,14 @@ export default function SalesCommercialWorkspace({
           />
           <KpiCard label="Avg fare (30d)" value={formatSalesCurrency(kpi.averageFare ?? 0)} />
           <KpiCard label="Network load factor (MTD)" value={formatLoadFactorPercent(kpi.loadFactor)} />
-          <KpiCard label="Top route" value={String((kpi.topRoute as { route?: string })?.route || '—')} />
+          <KpiCard
+            label="Top route (revenue)"
+            value={
+              (kpi.topRoute as { route?: string; revenue?: number } | null)?.route
+                ? `${String((kpi.topRoute as { route?: string }).route)} · ${formatSalesCurrency((kpi.topRoute as { revenue?: number }).revenue)}`
+                : '—'
+            }
+          />
         </div>
       )}
 
@@ -187,7 +194,8 @@ export default function SalesCommercialWorkspace({
             </strong>{' '}
             seats available on{' '}
             <strong>{Number((kpi.loadFactorScope as { flightLegCount?: number }).flightLegCount || 0)}</strong> legs (aircraft
-            assigned, INF excluded). Network LF = sold ÷ available (not an average of leg ratios).
+            assigned). <strong>Sold</strong> counts passengers with <strong>issued tickets</strong> on each leg (
+            <code>sm_seat_leg_allocation</code>). Network LF = sold ÷ available (not an average of leg ratios).
           </p>
           {(Array.isArray(kpi.perFlightLoadFactor) ? kpi.perFlightLoadFactor : []).length > 0 ? (
             <div style={{ overflow: 'auto', maxHeight: 260 }}>
@@ -222,6 +230,10 @@ export default function SalesCommercialWorkspace({
             <p style={{ margin: 0, color: '#94a3b8' }}>No qualifying flight legs in this departure window.</p>
           )}
         </div>
+      )}
+
+      {sub === 'kpi' && kpi && kpi.routeAnalytics && typeof kpi.routeAnalytics === 'object' && (
+        <RouteAnalyticsPanel analytics={kpi.routeAnalytics as Record<string, unknown>} title="Route analytics (MTD departures)" />
       )}
 
       {sub === 'rm' && rm && (
@@ -292,6 +304,12 @@ export default function SalesCommercialWorkspace({
                 </div>
               </div>
             )}
+          {rm.routeAnalytics && typeof rm.routeAnalytics === 'object' && (
+            <RouteAnalyticsPanel
+              analytics={rm.routeAnalytics as Record<string, unknown>}
+              title="Route analytics (summary date range)"
+            />
+          )}
           <pre style={{ maxHeight: 280, overflow: 'auto', background: '#f8fafc', padding: '0.75rem', fontSize: '0.72rem' }}>
             {JSON.stringify(
               {
@@ -504,6 +522,198 @@ export default function SalesCommercialWorkspace({
         </p>
       )}
     </section>
+  );
+}
+
+type RouteLeader = {
+  route?: string;
+  revenue?: number;
+  bookings?: number;
+  yieldPerPax?: number;
+  yieldPerSeat?: number | null;
+  loadFactor?: number | null;
+  seatsAvailable?: number;
+  seatsSold?: number;
+} | null;
+
+function RouteAnalyticsPanel({
+  analytics,
+  title
+}: {
+  analytics: Record<string, unknown>;
+  title?: string;
+}) {
+  const scope = analytics.scope as
+    | { minCapacityForLfLeader?: number; minBookingsForWorst?: number; routeCount?: number }
+    | undefined;
+  const rows: { key: string; label: string; row: RouteLeader; detail: string }[] = [
+    {
+      key: 'rev',
+      label: 'Highest revenue',
+      row: analytics.highestRevenue as RouteLeader,
+      detail: 'Sum of segment fare on legs with at least one issued ticket (same departure window).'
+    },
+    {
+      key: 'book',
+      label: 'Highest booked',
+      row: analytics.highestBooked as RouteLeader,
+      detail: 'Distinct PNRs with ≥1 issued-ticket seat on the O&D in the window.'
+    },
+    {
+      key: 'yield',
+      label: 'Best yield',
+      row: analytics.bestYield as RouteLeader,
+      detail: 'Best of revenue ÷ issued seat or revenue ÷ ticketed pax-legs on the O&D.'
+    },
+    {
+      key: 'lf',
+      label: 'Best load factor',
+      row: analytics.bestLoadFactor as RouteLeader,
+      detail: `Network LF on O&D: sold ÷ offered seats; only routes with ≥${scope?.minCapacityForLfLeader ?? 48} seats offered.`
+    },
+    {
+      key: 'worst',
+      label: 'Worst performing',
+      row: analytics.worstPerforming as RouteLeader,
+      detail: `Lowest LF when capacity ≥${scope?.minCapacityForLfLeader ?? 48} and bookings ≥${scope?.minBookingsForWorst ?? 2}; else lowest revenue among booked routes.`
+    }
+  ];
+
+  return (
+    <div style={{ marginTop: '0.75rem' }}>
+      <h4 style={{ margin: '0 0 0.25rem', fontSize: '0.9rem' }}>{title || 'Route analytics'}</h4>
+      <p style={{ margin: 0, fontSize: '0.72rem', color: '#64748b' }}>
+        {String(analytics.departureFrom || '').slice(0, 10)} → {String(analytics.departureBeforeExclusive || '').slice(0, 10)}{' '}
+        · {scope?.routeCount ?? 0} {'O&D'} rows in scope.
+      </p>
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
+          gap: '0.5rem',
+          marginTop: '0.45rem'
+        }}
+      >
+        {rows.map(({ key, label, row, detail }) => (
+          <div
+            key={key}
+            title={detail}
+            style={{
+              border: '1px solid #e2e8f0',
+              borderRadius: 10,
+              padding: '0.5rem 0.6rem',
+              background: '#fff',
+              fontSize: '0.78rem',
+              color: '#334155'
+            }}
+          >
+            <div style={{ fontSize: '0.65rem', color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.03em' }}>
+              {label}
+            </div>
+            <div style={{ fontWeight: 700, color: '#0f172a', marginTop: 4 }}>{row?.route || '—'}</div>
+            {key === 'rev' && row?.revenue != null && (
+              <div style={{ marginTop: 2 }}>{formatSalesCurrency(row.revenue)}</div>
+            )}
+            {key === 'book' && row?.bookings != null && <div style={{ marginTop: 2 }}>{String(row.bookings)} bookings</div>}
+            {key === 'yield' && (
+              <div style={{ marginTop: 2 }}>
+                {row?.yieldPerSeat != null && Number.isFinite(row.yieldPerSeat) ? (
+                  <div>{formatSalesCurrency(row.yieldPerSeat)} / issued seat</div>
+                ) : null}
+                {row?.yieldPerPax != null && Number.isFinite(row.yieldPerPax) ? (
+                  <div style={{ marginTop: 2, fontSize: '0.72rem', color: '#64748b' }}>
+                    {formatSalesCurrency(row.yieldPerPax)} / pax-leg
+                  </div>
+                ) : null}
+              </div>
+            )}
+            {key === 'lf' && row?.loadFactor != null && (
+              <div style={{ marginTop: 2 }}>
+                {formatLoadFactorPercent(row.loadFactor)} · {String(row.seatsSold ?? '—')} /{' '}
+                {String(row.seatsAvailable ?? '—')} seats
+              </div>
+            )}
+            {key === 'worst' && (
+              <div style={{ marginTop: 2 }}>
+                {row?.loadFactor != null && Number.isFinite(row.loadFactor)
+                  ? formatLoadFactorPercent(row.loadFactor)
+                  : row?.revenue != null
+                    ? formatSalesCurrency(row.revenue)
+                    : '—'}
+                {row?.bookings != null ? ` · ${row.bookings} bookings` : ''}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+      {(() => {
+        const cabin = analytics.cabinAnalytics as
+          | { byCabin?: Array<Record<string, unknown>>; byRouteAndCabin?: Array<Record<string, unknown>> }
+          | undefined;
+        const byCabin = cabin?.byCabin || [];
+        const byRc = cabin?.byRouteAndCabin || [];
+        if (byCabin.length === 0 && byRc.length === 0) return null;
+        return (
+          <div style={{ marginTop: '0.65rem' }}>
+            <h5 style={{ margin: '0 0 0.35rem', fontSize: '0.82rem' }}>Cabin seat analytics (issued tickets)</h5>
+            {byCabin.length > 0 ? (
+              <div style={{ overflow: 'auto', maxHeight: 160, marginBottom: '0.45rem' }}>
+                <table className="module-table" style={{ fontSize: '0.74rem' }}>
+                  <thead>
+                    <tr>
+                      <th>Cabin</th>
+                      <th>Seats sold</th>
+                      <th>Revenue</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {byCabin.map((c) => (
+                      <tr key={String(c.cabin)}>
+                        <td>{String(c.cabin)}</td>
+                        <td>{String(c.seats_sold ?? c.seatsSold ?? '—')}</td>
+                        <td>{formatSalesCurrency(c.revenue ?? c.segment_fare_sum)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : null}
+            {byRc.length > 0 ? (
+              <div style={{ overflow: 'auto', maxHeight: 200 }}>
+                <table className="module-table" style={{ fontSize: '0.72rem' }}>
+                  <thead>
+                    <tr>
+                      <th>Route</th>
+                      <th>Cabin</th>
+                      <th>Sold</th>
+                      <th>Revenue</th>
+                      <th>Yield / seat</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {byRc.map((r, i) => (
+                      <tr key={`${String(r.origin)}-${String(r.dest)}-${String(r.cabin)}-${i}`}>
+                        <td>
+                          {String(r.origin)}→{String(r.dest)}
+                        </td>
+                        <td>{String(r.cabin)}</td>
+                        <td>{String(r.seats_sold ?? r.seatsSold ?? '—')}</td>
+                        <td>{formatSalesCurrency(r.revenue ?? r.segment_fare_sum)}</td>
+                        <td>
+                          {r.yield_per_seat != null || r.yieldPerSeat != null
+                            ? formatSalesCurrency(Number(r.yield_per_seat ?? r.yieldPerSeat))
+                            : '—'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : null}
+          </div>
+        );
+      })()}
+    </div>
   );
 }
 

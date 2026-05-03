@@ -7,6 +7,7 @@ import {
   monthToDateDepartureWindow,
   queryLoadFactorSnapshot
 } from '../../services/loadFactor.js';
+import { queryRouteAnalyticsSnapshot } from '../../services/routeAnalytics.js';
 
 const ROLES_SALES = ['admin', 'super_admin', 'sales_manager'];
 const ROLES_SALES_FIN = ['admin', 'super_admin', 'sales_manager', 'finance'];
@@ -35,7 +36,7 @@ export function registerSalesCommercialRoutes(router) {
     const monthStart = `${today.slice(0, 7)}-01`;
     const lfWindow = monthToDateDepartureWindow(today);
     try {
-      const [todaySales, weekSales, monthSales, avgFare, lfSnap, topRoute, topAgent, topCorp, channelMix] =
+      const [todaySales, weekSales, monthSales, avgFare, lfSnap, routeSnap, topAgent, topCorp, channelMix] =
         await Promise.all([
           pool.query(
             `SELECT COALESCE(SUM(b.total_amount),0)::numeric AS v, COUNT(*)::int AS c
@@ -58,12 +59,15 @@ export function registerSalesCommercialRoutes(router) {
             [monthStart]
           ),
           queryLoadFactorSnapshot(pool, lfWindow.fromTs, lfWindow.toExclusiveTs),
-          pool
-            .query(
-              `SELECT origin, dest, origin || '→' || dest AS route, itinerary_fare_sum AS revenue
-               FROM sm_v_route_sales ORDER BY itinerary_fare_sum DESC NULLS LAST LIMIT 1`
-            )
-            .catch(() => ({ rows: [] })),
+          queryRouteAnalyticsSnapshot(pool, lfWindow.fromTs, lfWindow.toExclusiveTs).catch(() => ({
+            scope: { routeCount: 0 },
+            highestRevenue: null,
+            highestBooked: null,
+            bestYield: null,
+            bestLoadFactor: null,
+            worstPerforming: null,
+            cabinAnalytics: { byCabin: [], byRouteAndCabin: [] }
+          })),
           pool.query(
             `SELECT u.full_name, COUNT(*)::int AS c, COALESCE(SUM(b.total_amount),0)::numeric AS rev
              FROM bookings b JOIN users u ON u.id = b.created_by
@@ -97,10 +101,22 @@ export function registerSalesCommercialRoutes(router) {
           totalSeatsAvailable: lfSnap.totalSeatsAvailable,
           flightLegCount: lfSnap.flightLegCount,
           formula:
-            'sum(seats_sold)/sum(seats_available) over scheduled legs; seats_sold = distinct passengers on non-cancelled bookings (INF excluded); capacity = aircraft.seat_capacity; legs without aircraft omitted from denominator'
+            'sum(seats_sold)/sum(seats_available) over scheduled legs; seats_sold = distinct passengers on sm_seat_leg_allocation (issued tickets, INF excluded at allocation); capacity = aircraft.seat_capacity; legs without aircraft omitted from denominator'
         },
         perFlightLoadFactor: lfSnap.perFlightLoadFactor,
-        topRoute: topRoute.rows[0] || null,
+        topRoute: routeSnap.highestRevenue
+          ? {
+              origin: routeSnap.highestRevenue.origin,
+              dest: routeSnap.highestRevenue.dest,
+              route: routeSnap.highestRevenue.route,
+              revenue: routeSnap.highestRevenue.revenue
+            }
+          : null,
+        routeAnalytics: {
+          departureFrom: lfWindow.fromTs,
+          departureBeforeExclusive: lfWindow.toExclusiveTs,
+          ...routeSnap
+        },
         topAgent: topAgent.rows[0] || null,
         topCorporate: topCorp.rows[0] || null,
         channelRevenue: channelMix.rows || []
@@ -115,7 +131,7 @@ export function registerSalesCommercialRoutes(router) {
     const to = String(req.query.to || new Date().toISOString().slice(0, 10));
     try {
       const { fromTs, toExclusiveTs } = dateRangeToDepartureWindow(from, to);
-      const [routes, families, classes, policy, lfSnap] = await Promise.all([
+      const [routes, families, classes, policy, lfSnap, routeSnap] = await Promise.all([
         pool.query(`SELECT * FROM sm_v_route_sales ORDER BY itinerary_fare_sum DESC LIMIT 40`).catch(() => ({ rows: [] })),
         pool.query(`SELECT f.code, f.name, f.cabin FROM sm_fare_families f ORDER BY sort_order`).catch(() => ({ rows: [] })),
         pool
@@ -135,6 +151,15 @@ export function registerSalesCommercialRoutes(router) {
           totalSeatsAvailable: 0,
           flightLegCount: 0,
           perFlightLoadFactor: []
+        })),
+        queryRouteAnalyticsSnapshot(pool, fromTs, toExclusiveTs).catch(() => ({
+          scope: { routeCount: 0 },
+          highestRevenue: null,
+          highestBooked: null,
+          bestYield: null,
+          bestLoadFactor: null,
+          worstPerforming: null,
+          cabinAnalytics: { byCabin: [], byRouteAndCabin: [] }
         }))
       ]);
       return res.json({
@@ -152,6 +177,11 @@ export function registerSalesCommercialRoutes(router) {
           totalSeatsAvailable: lfSnap.totalSeatsAvailable,
           flightLegCount: lfSnap.flightLegCount,
           perFlightLoadFactor: lfSnap.perFlightLoadFactor
+        },
+        routeAnalytics: {
+          departureFrom: fromTs,
+          departureBeforeExclusive: toExclusiveTs,
+          ...routeSnap
         },
         note: 'Bucket inventory uses sm_rm_flight_bucket; call POST /revenue-management/recalculate-buckets to refresh.'
       });
@@ -187,6 +217,38 @@ export function registerSalesCommercialRoutes(router) {
     }
   });
 
+  router.get('/revenue-management/route-analytics', requireAuth, requireRoles(...ROLES_SALES_FIN), async (req, res) => {
+    const today = new Date().toISOString().slice(0, 10);
+    const fromQ = req.query.from ? String(req.query.from).slice(0, 10) : null;
+    const toQ = req.query.to ? String(req.query.to).slice(0, 10) : null;
+    let fromTs;
+    let toExclusiveTs;
+    if (fromQ && toQ) {
+      const w = dateRangeToDepartureWindow(fromQ, toQ);
+      fromTs = w.fromTs;
+      toExclusiveTs = w.toExclusiveTs;
+    } else {
+      const w = monthToDateDepartureWindow(today);
+      fromTs = w.fromTs;
+      toExclusiveTs = w.toExclusiveTs;
+    }
+    const minCap = req.query.minCapacityForLfLeader != null ? Number(req.query.minCapacityForLfLeader) : undefined;
+    const minBook = req.query.minBookingsForWorst != null ? Number(req.query.minBookingsForWorst) : undefined;
+    try {
+      const snap = await queryRouteAnalyticsSnapshot(pool, fromTs, toExclusiveTs, {
+        minCapacityForLfLeader: Number.isFinite(minCap) ? minCap : undefined,
+        minBookingsForWorst: Number.isFinite(minBook) ? minBook : undefined
+      });
+      return res.json({
+        departureFrom: fromTs,
+        departureBeforeExclusive: toExclusiveTs,
+        ...snap
+      });
+    } catch (e) {
+      return res.status(500).json({ message: 'Failed to load route analytics.', error: e.message });
+    }
+  });
+
   router.post(
     '/revenue-management/recalculate-buckets',
     requireAuth,
@@ -205,15 +267,10 @@ export function registerSalesCommercialRoutes(router) {
             `WITH lf AS (
                SELECT f.id AS flight_id,
                  ac.seat_capacity::numeric AS cap,
-                 COUNT(DISTINCT bp.passenger_id) FILTER (
-                   WHERE bp.passenger_id IS NOT NULL
-                     AND upper(trim(COALESCE(bp.passenger_type, 'ADT'))) <> 'INF'
-                 )::numeric AS pax
+                 COUNT(DISTINCT sla.passenger_id)::numeric AS pax
                FROM flights f
                INNER JOIN aircraft ac ON ac.id = f.aircraft_id AND ac.seat_capacity > 0
-               LEFT JOIN booking_flights bf ON bf.flight_id = f.id
-               LEFT JOIN bookings b ON b.id = bf.booking_id AND upper(trim(COALESCE(b.booking_status,''))) <> 'CANCELLED'
-               LEFT JOIN booking_passengers bp ON bp.booking_id = b.id
+               LEFT JOIN sm_seat_leg_allocation sla ON sla.flight_id = f.id
                WHERE f.id = $3::uuid
                GROUP BY f.id, ac.seat_capacity
              )
@@ -234,15 +291,10 @@ export function registerSalesCommercialRoutes(router) {
             `WITH lf AS (
                SELECT f.id AS flight_id,
                  ac.seat_capacity::numeric AS cap,
-                 COUNT(DISTINCT bp.passenger_id) FILTER (
-                   WHERE bp.passenger_id IS NOT NULL
-                     AND upper(trim(COALESCE(bp.passenger_type, 'ADT'))) <> 'INF'
-                 )::numeric AS pax
+                 COUNT(DISTINCT sla.passenger_id)::numeric AS pax
                FROM flights f
                INNER JOIN aircraft ac ON ac.id = f.aircraft_id AND ac.seat_capacity > 0
-               LEFT JOIN booking_flights bf ON bf.flight_id = f.id
-               LEFT JOIN bookings b ON b.id = bf.booking_id AND upper(trim(COALESCE(b.booking_status,''))) <> 'CANCELLED'
-               LEFT JOIN booking_passengers bp ON bp.booking_id = b.id
+               LEFT JOIN sm_seat_leg_allocation sla ON sla.flight_id = f.id
                GROUP BY f.id, ac.seat_capacity
              )
              UPDATE sm_rm_flight_bucket b

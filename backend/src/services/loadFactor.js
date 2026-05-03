@@ -41,16 +41,10 @@ export async function queryLoadFactorSnapshot(pool, fromTs, toExclusiveTs) {
          f.arrival_airport AS dest,
          f.departure_time,
          ac.seat_capacity::numeric AS seats_available,
-         COUNT(DISTINCT bp.passenger_id) FILTER (
-           WHERE bp.passenger_id IS NOT NULL
-             AND upper(trim(COALESCE(bp.passenger_type, 'ADT'))) <> 'INF'
-         )::numeric AS seats_sold
+         COUNT(DISTINCT sla.passenger_id) FILTER (WHERE sla.passenger_id IS NOT NULL)::numeric AS seats_sold
        FROM flights f
        INNER JOIN aircraft ac ON ac.id = f.aircraft_id AND ac.seat_capacity > 0
-       LEFT JOIN booking_flights bf ON bf.flight_id = f.id
-       LEFT JOIN bookings b ON b.id = bf.booking_id
-         AND upper(trim(COALESCE(b.booking_status, ''))) <> 'CANCELLED'
-       LEFT JOIN booking_passengers bp ON bp.booking_id = b.id
+       LEFT JOIN sm_seat_leg_allocation sla ON sla.flight_id = f.id
        WHERE f.departure_time >= $1::timestamptz
          AND f.departure_time < $2::timestamptz
        GROUP BY f.id, f.flight_number, f.departure_airport, f.arrival_airport, f.departure_time, ac.seat_capacity

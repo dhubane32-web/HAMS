@@ -25,6 +25,7 @@ import {
   recordPromoUsageRow,
   syncCrmCustomersForBooking
 } from '../../services/salesCommercialSync.js';
+import { releaseSeatLegAllocationsForBooking, syncSeatLegAllocationsForBooking } from '../../services/seatInventorySync.js';
 
 const router = express.Router();
 
@@ -126,6 +127,8 @@ async function issueTicketsForBooking(client, bookingId, userId, { requirePaid =
     issuedTickets.push(ticket.rows[0]);
     newlyIssued += 1;
   }
+
+  await syncSeatLegAllocationsForBooking(client, bookingId);
 
   if (newlyIssued > 0) {
     await logFinanceTransaction(client, {
@@ -1358,6 +1361,7 @@ router.post(
         await client.query('ROLLBACK');
         return res.status(400).json({ message: 'Booking is already cancelled.' });
       }
+      await releaseSeatLegAllocationsForBooking(client, bookingId);
       await client.query(`UPDATE bookings SET booking_status = 'CANCELLED' WHERE id = $1`, [bookingId]);
       await client.query(
         `INSERT INTO audit_logs (user_id, action, entity, entity_id, metadata)
