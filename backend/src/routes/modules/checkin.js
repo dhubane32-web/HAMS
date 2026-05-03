@@ -8,6 +8,7 @@ import {
   buildCheckinLookupPayload,
   buildBoardingPassView
 } from '../../services/checkinBoardingService.js';
+import { buildBoardingPassPdfBuffer, buildBagTagPdfBuffer, loadBagTagPdfContext } from '../../services/checkinDocuments.js';
 import { assertGateMatchesFlight, runBoardingScan } from '../../services/checkinBoardingWorkflow.js';
 import { isFlightOpenForPassengerCheckin } from '../../lib/flightOccStatus.js';
 
@@ -23,6 +24,127 @@ function isUuid(value) {
 router.get('/health', (_req, res) => {
   res.json({ module: 'checkin', status: 'ready' });
 });
+
+/**
+ * DCS-style PNR retrieval: requires passenger last name on the booking (reduces PNR-only data exposure).
+ * GET /api/checkin/lookup?pnr=&lastName=
+ */
+router.get(
+  '/lookup',
+  requireAuth,
+  requireRoles('admin', 'agent', 'operations', 'customer_service', 'sales_manager'),
+  async (req, res) => {
+    const pnr = String(req.query.pnr || '').trim().toUpperCase();
+    const lastName = String(req.query.lastName || req.query.last_name || '').trim();
+    if (!pnr || !lastName) {
+      return res.status(400).json({ message: 'Query parameters pnr and lastName are required.' });
+    }
+    try {
+      const bookingResult = await pool.query(
+        `SELECT id, pnr, booking_status, payment_status, trip_type, total_amount, currency, created_at
+         FROM bookings WHERE pnr = $1`,
+        [pnr]
+      );
+      const booking = bookingResult.rows[0];
+      if (!booking) {
+        return res.status(404).json({ message: 'PNR and passenger last name combination not found.' });
+      }
+      const match = await pool.query(
+        `SELECT 1
+         FROM booking_passengers bp
+         JOIN passengers p ON p.id = bp.passenger_id
+         WHERE bp.booking_id = $1
+           AND upper(btrim(p.last_name::text)) = upper(btrim($2::text))
+         LIMIT 1`,
+        [booking.id, lastName]
+      );
+      if (match.rowCount === 0) {
+        return res.status(404).json({ message: 'PNR and passenger last name combination not found.' });
+      }
+      const payload = await buildCheckinLookupPayload(pool, booking, {
+        source: 'PNR_LASTNAME',
+        assertEligible: assertBookingCheckinEligible
+      });
+      return res.status(200).json({ matchType: 'PNR_LASTNAME', ...payload });
+    } catch (error) {
+      return res.status(500).json({ message: 'Lookup failed.', error: error.message });
+    }
+  }
+);
+
+/**
+ * Boarding pass PDF (ref = check-in UUID or boarding_pass_no).
+ * GET /api/checkin/documents/boarding-pass-pdf?ref=
+ */
+router.get(
+  '/documents/boarding-pass-pdf',
+  requireAuth,
+  requireRoles('admin', 'agent', 'operations', 'customer_service', 'sales_manager'),
+  async (req, res) => {
+    const ref = String(req.query.ref || '').trim();
+    if (!ref) {
+      return res.status(400).json({ message: 'Query parameter ref is required (check-in UUID or boarding pass number).' });
+    }
+    try {
+      let checkinId = null;
+      if (isUuid(ref)) {
+        checkinId = ref;
+      } else {
+        const q = await pool.query(
+          `SELECT id FROM checkins WHERE upper(btrim(boarding_pass_no::text)) = upper(btrim($1::text)) LIMIT 1`,
+          [ref]
+        );
+        if (!q.rows[0]) {
+          return res.status(404).json({ message: 'Boarding pass not found.' });
+        }
+        checkinId = q.rows[0].id;
+      }
+      const bp = await buildBoardingPassView(pool, checkinId);
+      if (!bp) {
+        return res.status(404).json({ message: 'Boarding pass not found.' });
+      }
+      const buf = await buildBoardingPassPdfBuffer(bp);
+      if (!buf) {
+        return res.status(500).json({ message: 'Failed to render PDF.' });
+      }
+      const safeName = String(bp.boardingPassNo || checkinId).replace(/[^\w-]+/g, '_');
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="boarding-pass-${safeName}.pdf"`);
+      return res.status(200).send(buf);
+    } catch (error) {
+      return res.status(500).json({ message: 'Failed to generate boarding pass PDF.', error: error.message });
+    }
+  }
+);
+
+/**
+ * Baggage tag stub PDF.
+ * GET /api/checkin/documents/baggage-tag-pdf?baggageId=
+ */
+router.get(
+  '/documents/baggage-tag-pdf',
+  requireAuth,
+  requireRoles('admin', 'agent', 'operations', 'customer_service', 'sales_manager'),
+  async (req, res) => {
+    const baggageId = String(req.query.baggageId || '').trim();
+    if (!isUuid(baggageId)) {
+      return res.status(400).json({ message: 'Query parameter baggageId (UUID) is required.' });
+    }
+    try {
+      const ctx = await loadBagTagPdfContext(pool, baggageId);
+      if (!ctx) {
+        return res.status(404).json({ message: 'Baggage record not found.' });
+      }
+      const buf = await buildBagTagPdfBuffer(ctx);
+      const safe = String(ctx.tagNumber || baggageId).replace(/[^\w-]+/g, '_');
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="bag-tag-${safe}.pdf"`);
+      return res.status(200).send(buf);
+    } catch (error) {
+      return res.status(500).json({ message: 'Failed to generate baggage tag PDF.', error: error.message });
+    }
+  }
+);
 
 /**
  * GET /api/checkin/search?q=&type=
@@ -308,7 +430,8 @@ router.get(
     }
     try {
       const flightResult = await pool.query(
-        `SELECT id, flight_number, departure_airport, arrival_airport, departure_time, arrival_time, gate, boarding_time, status
+        `SELECT id, flight_number, departure_airport, arrival_airport, departure_time, arrival_time, gate, boarding_time, status,
+                checkin_closed_at, checkin_closed_by
          FROM flights WHERE id = $1`,
         [flightId]
       );
@@ -410,6 +533,113 @@ router.get(
   }
 );
 
+/**
+ * Boarding reconciliation: counts vs capacity, check-in closure, gate readiness (DCS / ramp brief).
+ * GET /api/checkin/flights/:flightId/reconciliation
+ */
+router.get(
+  '/flights/:flightId/reconciliation',
+  requireAuth,
+  requireRoles('admin', 'agent', 'operations', 'customer_service', 'sales_manager'),
+  async (req, res) => {
+    const { flightId } = req.params;
+    if (!isUuid(flightId)) {
+      return res.status(400).json({ message: 'Invalid flight id.' });
+    }
+    try {
+      const flightResult = await pool.query(
+        `SELECT f.id, f.flight_number, f.departure_airport, f.arrival_airport, f.departure_time, f.arrival_time,
+                f.gate, f.boarding_time, f.status, f.checkin_closed_at, f.checkin_closed_by,
+                COALESCE(a.seat_capacity, 0)::int AS seat_capacity
+         FROM flights f
+         LEFT JOIN aircraft a ON a.id = f.aircraft_id
+         WHERE f.id = $1`,
+        [flightId]
+      );
+      const flight = flightResult.rows[0];
+      if (!flight) {
+        return res.status(404).json({ message: 'Flight not found.' });
+      }
+
+      const rows = await pool.query(
+        `SELECT
+          c.id AS checkin_id,
+          c.seat_number,
+          c.boarding_status,
+          c.checkin_status
+        FROM booking_flights bf
+        JOIN bookings b ON b.id = bf.booking_id
+        JOIN booking_passengers bp ON bp.booking_id = b.id
+        JOIN passengers p ON p.id = bp.passenger_id
+        LEFT JOIN checkins c
+          ON c.booking_id = b.id AND c.passenger_id = p.id AND c.flight_id = bf.flight_id
+        WHERE bf.flight_id = $1
+          AND UPPER(TRIM(b.booking_status)) = 'CONFIRMED'
+          AND UPPER(TRIM(COALESCE(b.payment_status, ''))) = 'PAID'`,
+        [flightId]
+      );
+
+      const expected = rows.rows.length;
+      const checkedIn = rows.rows.filter((r) => r.checkin_id);
+      const notCheckedIn = rows.rows.filter((r) => !r.checkin_id);
+      const byBs = (s) => checkedIn.filter((r) => String(r.boarding_status || '').toUpperCase() === s);
+      const boarded = byBs('BOARDED');
+      const noShow = byBs('NO_SHOW');
+      const boarding = byBs('BOARDING');
+      const checkedInOnly = byBs('CHECKED_IN');
+      const capacity = Math.max(0, Number(flight.seat_capacity || 0));
+      const seatsTaken = checkedIn.filter((r) => r.seat_number && String(r.seat_number).trim()).length;
+
+      const reconciliation = {
+        expected_pax: expected,
+        checked_in_total: checkedIn.length,
+        not_checked_in: notCheckedIn.length,
+        boarding_status_checked_in: checkedInOnly.length,
+        boarding_status_boarding: boarding.length,
+        boarded: boarded.length,
+        no_show: noShow.length,
+        aircraft_seat_capacity: capacity,
+        seats_assigned: seatsTaken,
+        over_capacity_risk: capacity > 0 && checkedIn.length > capacity,
+        gate_assigned: Boolean(flight.gate && String(flight.gate).trim()),
+        boarding_time_set: Boolean(flight.boarding_time),
+        checkin_closed: Boolean(flight.checkin_closed_at),
+        checkin_closed_at: flight.checkin_closed_at,
+        flight_ops_status: flight.status,
+        variance: {
+          uplift_expected_vs_checked_in: expected - checkedIn.length,
+          checked_in_vs_boarded_plus_active:
+            checkedIn.length - (boarded.length + noShow.length + boarding.length + checkedInOnly.length)
+        }
+      };
+
+      return res.status(200).json({
+        flight: {
+          id: flight.id,
+          flight_number: flight.flight_number,
+          departure_airport: flight.departure_airport,
+          arrival_airport: flight.arrival_airport,
+          departure_time: flight.departure_time,
+          gate: flight.gate,
+          boarding_time: flight.boarding_time,
+          status: flight.status,
+          checkin_closed_at: flight.checkin_closed_at,
+          checkin_closed_by: flight.checkin_closed_by,
+          seat_capacity: capacity
+        },
+        reconciliation,
+        notes: [
+          'Variance checked_in_vs_boarded_plus_active should be 0 when every checked-in passenger is in exactly one terminal boarding state.',
+          'no_show counts passengers marked NO_SHOW after check-in.',
+          'Close check-in stops new passenger check-ins for this flight; use POST .../close-check-in.'
+        ]
+      });
+    } catch (error) {
+      return res.status(500).json({ message: 'Reconciliation failed.', error: error.message });
+    }
+  }
+);
+
 router.patch(
   '/flights/:flightId/gate-boarding',
   requireAuth,
@@ -450,6 +680,81 @@ router.patch(
       return res.status(200).json({ flight: upd.rows[0] });
     } catch (error) {
       return res.status(500).json({ message: 'Failed to update gate/boarding.', error: error.message });
+    }
+  }
+);
+
+router.post(
+  '/flights/:flightId/close-check-in',
+  requireAuth,
+  requireRoles('admin', 'agent', 'operations'),
+  async (req, res) => {
+    const { flightId } = req.params;
+    if (!isUuid(flightId)) {
+      return res.status(400).json({ message: 'Invalid flight id.' });
+    }
+    try {
+      const cur = await pool.query(
+        `SELECT id, checkin_closed_at FROM flights WHERE id = $1`,
+        [flightId]
+      );
+      if (!cur.rows[0]) {
+        return res.status(404).json({ message: 'Flight not found.' });
+      }
+      if (cur.rows[0].checkin_closed_at) {
+        return res.status(409).json({ message: 'Flight check-in is already closed.' });
+      }
+      const upd = await pool.query(
+        `UPDATE flights
+         SET checkin_closed_at = NOW(), checkin_closed_by = $2
+         WHERE id = $1 AND checkin_closed_at IS NULL
+         RETURNING id, flight_number, checkin_closed_at, checkin_closed_by`,
+        [flightId, req.user.userId]
+      );
+      await pool.query(
+        `INSERT INTO audit_logs (user_id, action, entity, entity_id, metadata)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [req.user.userId, 'FLIGHT_CHECKIN_CLOSED', 'flights', flightId, JSON.stringify({})]
+      );
+      return res.status(200).json({ flight: upd.rows[0], message: 'Passenger check-in closed for this flight.' });
+    } catch (error) {
+      return res.status(500).json({ message: 'Failed to close check-in.', error: error.message });
+    }
+  }
+);
+
+router.post(
+  '/flights/:flightId/reopen-check-in',
+  requireAuth,
+  requireRoles('admin', 'agent', 'operations'),
+  async (req, res) => {
+    const { flightId } = req.params;
+    if (!isUuid(flightId)) {
+      return res.status(400).json({ message: 'Invalid flight id.' });
+    }
+    try {
+      const cur = await pool.query(`SELECT id, checkin_closed_at FROM flights WHERE id = $1`, [flightId]);
+      if (!cur.rows[0]) {
+        return res.status(404).json({ message: 'Flight not found.' });
+      }
+      if (!cur.rows[0].checkin_closed_at) {
+        return res.status(409).json({ message: 'Flight check-in is not closed.' });
+      }
+      const upd = await pool.query(
+        `UPDATE flights
+         SET checkin_closed_at = NULL, checkin_closed_by = NULL
+         WHERE id = $1
+         RETURNING id, flight_number, checkin_closed_at, checkin_closed_by`,
+        [flightId]
+      );
+      await pool.query(
+        `INSERT INTO audit_logs (user_id, action, entity, entity_id, metadata)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [req.user.userId, 'FLIGHT_CHECKIN_REOPENED', 'flights', flightId, JSON.stringify({})]
+      );
+      return res.status(200).json({ flight: upd.rows[0], message: 'Passenger check-in reopened for this flight.' });
+    } catch (error) {
+      return res.status(500).json({ message: 'Failed to reopen check-in.', error: error.message });
     }
   }
 );
@@ -975,10 +1280,19 @@ async function processCheckIn(req, res) {
       });
     }
 
-    const flightStatusRow = await client.query(`SELECT id, status FROM flights WHERE id = $1`, [flightId]);
+    const flightStatusRow = await client.query(
+      `SELECT id, status, checkin_closed_at FROM flights WHERE id = $1`,
+      [flightId]
+    );
     if (!flightStatusRow.rows[0]) {
       await client.query('ROLLBACK');
       return res.status(404).json({ message: 'Flight not found.' });
+    }
+    if (flightStatusRow.rows[0].checkin_closed_at) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({
+        message: 'Flight check-in is closed; new check-ins are not accepted. Operations may reopen check-in if required.'
+      });
     }
     const fs = String(flightStatusRow.rows[0].status || '').toUpperCase();
     const relaxScheduled = String(process.env.OCC_RELAX_CHECKIN_STATUSES || '').toLowerCase() === 'true';
@@ -1131,6 +1445,7 @@ async function processCheckIn(req, res) {
     const bpView = await buildBoardingPassView(pool, checkinId);
     const boardingPass = bpView
       ? {
+          checkin_id: bpView.checkin_id,
           passengerName: bpView.passengerName,
           pnr: bpView.pnr,
           ticketNumber: bpView.ticketNumber,
@@ -1140,7 +1455,10 @@ async function processCheckIn(req, res) {
           gate: bpView.gate,
           boardingTime: bpView.boardingTime,
           departureTime: bpView.departureTime,
-          boardingPassNo: bpView.boardingPassNo
+          boardingPassNo: bpView.boardingPassNo,
+          boarding_sequence: bpView.boarding_sequence ?? null,
+          boarding_status: bpView.boarding_status,
+          checkin_status: bpView.checkin_status
         }
       : null;
 

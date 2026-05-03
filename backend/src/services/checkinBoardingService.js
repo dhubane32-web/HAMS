@@ -92,7 +92,7 @@ export async function buildCheckinLookupPayload(pool, booking, lookupMeta = {}) 
   const eligibility = assertFn(booking);
 
   const itinerary = await pool.query(
-    `SELECT f.id, f.flight_number, f.departure_airport, f.arrival_airport, f.departure_time, f.arrival_time, f.status, f.gate, f.boarding_time, bf.leg_type
+    `SELECT f.id, f.flight_number, f.departure_airport, f.arrival_airport, f.departure_time, f.arrival_time, f.status, f.gate, f.boarding_time, f.checkin_closed_at, bf.leg_type
      FROM booking_flights bf
      JOIN flights f ON f.id = bf.flight_id
      WHERE bf.booking_id = $1
@@ -102,6 +102,7 @@ export async function buildCheckinLookupPayload(pool, booking, lookupMeta = {}) 
 
   const legs = itinerary.rows.map((f) => ({
     ...f,
+    checkin_closed: Boolean(f.checkin_closed_at),
     boarding_display_time: computeBoardingDisplayIso(f),
     gate_display: f.gate || 'TBD'
   }));
@@ -123,6 +124,7 @@ export async function buildCheckinLookupPayload(pool, booking, lookupMeta = {}) 
         f.status AS flight_status,
         f.gate,
         f.boarding_time,
+        f.checkin_closed_at,
         bf.leg_type,
         c.id AS checkin_id,
         c.seat_number,
@@ -185,6 +187,7 @@ export async function buildCheckinLookupPayload(pool, booking, lookupMeta = {}) 
       gate: row.gate,
       gate_display: row.gate || 'TBD',
       boarding_time: row.boarding_time,
+      checkin_closed: Boolean(row.checkin_closed_at),
       boarding_display_time: computeBoardingDisplayIso(row),
       leg_type: row.leg_type,
       ticket_number: row.ticket_number,

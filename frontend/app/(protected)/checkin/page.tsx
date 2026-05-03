@@ -24,6 +24,7 @@ type LegInfo = {
   is_checked_in?: boolean;
   boarding_status?: string | null;
   operational_status?: string;
+  checkin_closed?: boolean;
 };
 
 type PassengerView = {
@@ -58,6 +59,7 @@ type PnrResponse = {
     status?: string;
     gate_display?: string;
     boarding_display_time?: string;
+    checkin_closed?: boolean;
   }>;
   passengers: PassengerView[];
 };
@@ -65,6 +67,7 @@ type PnrResponse = {
 type BagRow = { weightKg: string; pieces: string };
 
 type BoardingPassPayload = {
+  checkin_id?: string;
   passengerName: string;
   pnr: string;
   ticketNumber: string | null;
@@ -75,6 +78,9 @@ type BoardingPassPayload = {
   boardingTime: string;
   boardingPassNo: string;
   departureTime?: string;
+  boarding_sequence?: number | null;
+  boarding_status?: string | null;
+  checkin_status?: string | null;
 };
 
 type SeatMapCell = { id: string; cabin: string; available: boolean };
@@ -105,10 +111,37 @@ type NameSearchHit = {
   passenger: { id: string; first_name: string; last_name: string };
 };
 
+type ReconciliationPayload = {
+  flight: Record<string, unknown>;
+  reconciliation: Record<string, unknown>;
+  notes?: string[];
+};
+
 function getToken() {
   if (typeof window === 'undefined') return null;
   hydrateSessionFromCookie();
   return localStorage.getItem('hams_token');
+}
+
+async function downloadAuthedPdf(pathWithQuery: string, filenameFallback: string) {
+  const token = getToken();
+  if (!token) {
+    toast.error('Login required.');
+    return;
+  }
+  const res = await fetch(`${API_BASE_URL}${pathWithQuery}`, { headers: { Authorization: `Bearer ${token}` } });
+  if (!res.ok) {
+    const err = (await res.json().catch(() => ({}))) as { message?: string };
+    toast.error(err.message || `PDF failed (${res.status})`);
+    return;
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filenameFallback;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 export default function CheckinPage() {
@@ -118,6 +151,7 @@ export default function CheckinPage() {
   const [nameSearchResults, setNameSearchResults] = useState<NameSearchHit[] | null>(null);
 
   const [pnrInput, setPnrInput] = useState('');
+  const [pnrLookupLastName, setPnrLookupLastName] = useState('');
   const [ticketInput, setTicketInput] = useState('');
   const [pnrData, setPnrData] = useState<PnrResponse | null>(null);
   const [pnrLoading, setPnrLoading] = useState(false);
@@ -135,6 +169,7 @@ export default function CheckinPage() {
   const [acceptExcessCharge, setAcceptExcessCharge] = useState(false);
   const [checkinLoading, setCheckinLoading] = useState(false);
   const [boardingPass, setBoardingPass] = useState<BoardingPassPayload | null>(null);
+  const [lastBaggageRows, setLastBaggageRows] = useState<Array<{ id: string; tag_number?: string }>>([]);
 
   const [flightIdManifest, setFlightIdManifest] = useState('');
   const [manifestLoading, setManifestLoading] = useState(false);
@@ -150,6 +185,9 @@ export default function CheckinPage() {
       boarded: ManifestPassenger[];
     };
   } | null>(null);
+  const [reconciliation, setReconciliation] = useState<ReconciliationPayload | null>(null);
+  const [reconciliationLoading, setReconciliationLoading] = useState(false);
+  const [closeCheckinLoading, setCloseCheckinLoading] = useState(false);
 
   const [gateEdit, setGateEdit] = useState('');
   const [boardingEdit, setBoardingEdit] = useState('');
@@ -159,15 +197,21 @@ export default function CheckinPage() {
   const [scanStrictGate, setScanStrictGate] = useState(false);
   const [scanLoading, setScanLoading] = useState(false);
 
-  const fetchPnr = useCallback(async (overridePnr?: string) => {
+  const fetchPnr = useCallback(async (overridePnr?: string, overrideLastName?: string) => {
     const pnr = (overridePnr ?? pnrInput).trim().toUpperCase();
+    const lastName = (overrideLastName ?? pnrLookupLastName).trim();
     if (!pnr) {
       setPnrError('Enter a PNR.');
+      return;
+    }
+    if (!lastName) {
+      setPnrError('Enter passenger last name (DCS: PNR + last name lookup).');
       return;
     }
     setPnrError('');
     setPnrLoading(true);
     setBoardingPass(null);
+    setLastBaggageRows([]);
     try {
       const token = getToken();
       if (!token) {
@@ -175,7 +219,7 @@ export default function CheckinPage() {
         return;
       }
       const res = await fetch(
-        `${API_BASE_URL}/api/checkin/search?q=${encodeURIComponent(pnr)}&type=pnr`,
+        `${API_BASE_URL}/api/checkin/lookup?pnr=${encodeURIComponent(pnr)}&lastName=${encodeURIComponent(lastName)}`,
         { headers: { Authorization: `Bearer ${token}` } }
       );
       const data = (await res.json()) as PnrResponse & { message?: string; results?: NameSearchHit[] };
@@ -194,14 +238,14 @@ export default function CheckinPage() {
       setVerificationPassportLast4('');
       setSeatNumber('');
       setSeatMap(null);
-      toast.success(`Loaded PNR ${data.booking.pnr}`);
+      toast.success(`Loaded PNR ${data.booking.pnr} (verified last name)`);
     } catch {
       setPnrError('Network error.');
       setPnrData(null);
     } finally {
       setPnrLoading(false);
     }
-  }, [pnrInput]);
+  }, [pnrInput, pnrLookupLastName]);
 
   const fetchTicket = useCallback(async () => {
     const t = ticketInput.trim();
@@ -212,6 +256,7 @@ export default function CheckinPage() {
     setPnrError('');
     setPnrLoading(true);
     setBoardingPass(null);
+    setLastBaggageRows([]);
     try {
       const token = getToken();
       if (!token) {
@@ -256,6 +301,7 @@ export default function CheckinPage() {
     setPnrError('');
     setPnrLoading(true);
     setBoardingPass(null);
+    setLastBaggageRows([]);
     setNameSearchResults(null);
     try {
       const token = getToken();
@@ -380,7 +426,8 @@ export default function CheckinPage() {
       });
       const data = (await res.json()) as {
         message?: string;
-        boardingPass?: BoardingPassPayload;
+        boardingPass?: BoardingPassPayload & { checkin_id?: string; boarding_sequence?: number | null };
+        baggage?: Array<{ id: string; tag_number?: string }>;
         excessCharge?: number;
         currency?: string;
       };
@@ -389,6 +436,7 @@ export default function CheckinPage() {
         return;
       }
       setBoardingPass(data.boardingPass || null);
+      setLastBaggageRows((data.baggage || []).filter((b) => b.id));
       toast.success(data.message || 'Checked in');
       await fetchPnr();
     } catch {
@@ -406,6 +454,7 @@ export default function CheckinPage() {
     }
     setManifestLoading(true);
     setManifest(null);
+    setReconciliation(null);
     try {
       const token = getToken();
       if (!token) return;
@@ -426,6 +475,84 @@ export default function CheckinPage() {
       toast.error('Manifest request failed');
     } finally {
       setManifestLoading(false);
+    }
+  }
+
+  async function loadReconciliation() {
+    const id = flightIdManifest.trim();
+    if (!id) {
+      toast.error('Enter flight UUID');
+      return;
+    }
+    setReconciliationLoading(true);
+    setReconciliation(null);
+    try {
+      const token = getToken();
+      if (!token) return;
+      const res = await fetch(`${API_BASE_URL}/api/checkin/flights/${id}/reconciliation`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = (await res.json()) as ReconciliationPayload & { message?: string };
+      if (!res.ok) {
+        toast.error(data.message || 'Reconciliation failed');
+        return;
+      }
+      setReconciliation(data);
+      toast.success('Reconciliation loaded');
+    } catch {
+      toast.error('Reconciliation request failed');
+    } finally {
+      setReconciliationLoading(false);
+    }
+  }
+
+  async function closeFlightCheckin() {
+    const id = flightIdManifest.trim();
+    if (!id) return;
+    setCloseCheckinLoading(true);
+    try {
+      const token = getToken();
+      if (!token) return;
+      const res = await fetch(`${API_BASE_URL}/api/checkin/flights/${id}/close-check-in`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = (await res.json()) as { message?: string };
+      if (!res.ok) {
+        toast.error(data.message || 'Close check-in failed');
+        return;
+      }
+      toast.success(data.message || 'Check-in closed');
+      await loadManifest();
+    } catch {
+      toast.error('Close check-in request failed');
+    } finally {
+      setCloseCheckinLoading(false);
+    }
+  }
+
+  async function reopenFlightCheckin() {
+    const id = flightIdManifest.trim();
+    if (!id) return;
+    setCloseCheckinLoading(true);
+    try {
+      const token = getToken();
+      if (!token) return;
+      const res = await fetch(`${API_BASE_URL}/api/checkin/flights/${id}/reopen-check-in`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = (await res.json()) as { message?: string };
+      if (!res.ok) {
+        toast.error(data.message || 'Reopen failed');
+        return;
+      }
+      toast.success(data.message || 'Check-in reopened');
+      await loadManifest();
+    } catch {
+      toast.error('Reopen check-in request failed');
+    } finally {
+      setCloseCheckinLoading(false);
     }
   }
 
@@ -471,24 +598,29 @@ export default function CheckinPage() {
           strictGate: scanStrictGate || undefined
         })
       });
-      const data = (await res.json()) as { message?: string; boardingPass?: BoardingPassPayload };
+      const data = (await res.json()) as { message?: string; boardingPass?: BoardingPassPayload & Record<string, unknown> };
       if (!res.ok) {
         toast.error(data.message || 'Scan failed');
         return;
       }
       toast.success(data.message || 'Boarded');
       if (data.boardingPass) {
+        const bp = data.boardingPass;
         setBoardingPass({
-          passengerName: data.boardingPass.passengerName,
-          pnr: data.boardingPass.pnr,
-          ticketNumber: data.boardingPass.ticketNumber ?? null,
-          flightNumber: data.boardingPass.flightNumber,
-          route: data.boardingPass.route,
-          seat: data.boardingPass.seat,
-          gate: data.boardingPass.gate,
-          boardingTime: data.boardingPass.boardingTime,
-          boardingPassNo: data.boardingPass.boardingPassNo,
-          departureTime: data.boardingPass.departureTime
+          checkin_id: typeof bp.checkin_id === 'string' ? bp.checkin_id : undefined,
+          passengerName: bp.passengerName,
+          pnr: bp.pnr,
+          ticketNumber: bp.ticketNumber ?? null,
+          flightNumber: bp.flightNumber,
+          route: bp.route,
+          seat: bp.seat,
+          gate: bp.gate,
+          boardingTime: bp.boardingTime,
+          boardingPassNo: bp.boardingPassNo,
+          departureTime: bp.departureTime,
+          boarding_sequence: (bp.boarding_sequence as number | null | undefined) ?? null,
+          boarding_status: (bp.boarding_status as string | undefined) ?? null,
+          checkin_status: (bp.checkin_status as string | undefined) ?? null
         });
       }
       setScanInput('');
@@ -564,7 +696,15 @@ export default function CheckinPage() {
                     {h.passenger.first_name} {h.passenger.last_name}
                   </strong>{' '}
                   · PNR <strong>{h.pnr}</strong>{' '}
-                  <button type="button" className="secondary" onClick={() => void fetchPnr(h.pnr)}>
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={() => {
+                      setPnrInput(h.pnr);
+                      setPnrLookupLastName(h.passenger.last_name);
+                      void fetchPnr(h.pnr, h.passenger.last_name);
+                    }}
+                  >
                     Load PNR
                   </button>
                 </li>
@@ -572,12 +712,20 @@ export default function CheckinPage() {
             </ul>
           </div>
         )}
-        <h3 style={{ fontSize: '0.95rem', marginBottom: '0.5rem' }}>By PNR</h3>
+        <h3 style={{ fontSize: '0.95rem', marginBottom: '0.5rem' }}>By PNR + passenger last name (DCS)</h3>
+        <p style={{ fontSize: '0.8rem', color: '#64748b', marginTop: 0 }}>
+          Uses <code style={{ fontSize: '0.75rem' }}>GET /api/checkin/lookup</code> — record is returned only when the last name matches a passenger on the booking.
+        </p>
         <div className="module-form-grid">
           <input
             value={pnrInput}
             onChange={(e) => setPnrInput(e.target.value.toUpperCase())}
             placeholder="PNR e.g. ABC12X"
+          />
+          <input
+            value={pnrLookupLastName}
+            onChange={(e) => setPnrLookupLastName(e.target.value)}
+            placeholder="Passenger last name"
           />
           <button type="button" onClick={() => void fetchPnr()} disabled={pnrLoading}>
             {pnrLoading ? 'Loading…' : 'Retrieve'}
@@ -631,10 +779,13 @@ export default function CheckinPage() {
             <ul style={{ margin: '0.25rem 0 0', paddingLeft: '1.2rem' }}>
               {pnrData.itinerary.map((f) => (
                 <li key={f.id}>
-                  {f.leg_type}: <strong>{f.flight_number}</strong> {f.departure_airport}→{f.arrival_airport} —{' '}
-                  {new Date(f.departure_time).toLocaleString()} | <strong>{f.status ?? '—'}</strong> | Gate{' '}
-                  {f.gate_display ?? 'TBD'} | Boarding{' '}
-                  {f.boarding_display_time ? new Date(f.boarding_display_time).toLocaleString() : '—'}
+              {f.leg_type}: <strong>{f.flight_number}</strong> {f.departure_airport}→{f.arrival_airport} —{' '}
+              {new Date(f.departure_time).toLocaleString()} | <strong>{f.status ?? '—'}</strong> | Gate{' '}
+              {f.gate_display ?? 'TBD'} | Boarding{' '}
+              {f.boarding_display_time ? new Date(f.boarding_display_time).toLocaleString() : '—'}
+              {f.checkin_closed ? (
+                <span style={{ color: '#b45309', fontWeight: 600 }}> · Check-in closed</span>
+              ) : null}
                 </li>
               ))}
             </ul>
@@ -653,6 +804,7 @@ export default function CheckinPage() {
                         {l.ticket_status ? ` · tkt ${l.ticket_status}` : ''}
                         {l.seat_number ? ` · seat ${l.seat_number}` : ''}
                         {l.boarding_sequence != null ? ` · seq ${l.boarding_sequence}` : ''}
+                        {l.checkin_closed ? ' · ck-in closed' : ''}
                         {l.ticket_number ? ` · ticket ${l.ticket_number}` : ''}
                       </li>
                     ))}
@@ -840,6 +992,43 @@ export default function CheckinPage() {
               <div>Departure: {new Date(boardingPass.departureTime).toLocaleString()}</div>
             )}
             <div>BP #: {boardingPass.boardingPassNo}</div>
+            {boardingPass.boarding_sequence != null && <div>Boarding sequence: {boardingPass.boarding_sequence}</div>}
+            {(boardingPass.boarding_status || boardingPass.checkin_status) && (
+              <div>
+                Status: {boardingPass.boarding_status || '—'} / {boardingPass.checkin_status || '—'}
+              </div>
+            )}
+          </div>
+          <div style={{ marginTop: 12, display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+            <button
+              type="button"
+              className="secondary"
+              onClick={() =>
+                void downloadAuthedPdf(
+                  `/api/checkin/documents/boarding-pass-pdf?ref=${encodeURIComponent(
+                    boardingPass.checkin_id || boardingPass.boardingPassNo
+                  )}`,
+                  `boarding-pass-${boardingPass.boardingPassNo}.pdf`
+                )
+              }
+            >
+              Download BP PDF
+            </button>
+            {lastBaggageRows.map((b) => (
+              <button
+                key={b.id}
+                type="button"
+                className="secondary"
+                onClick={() =>
+                  void downloadAuthedPdf(
+                    `/api/checkin/documents/baggage-tag-pdf?baggageId=${encodeURIComponent(b.id)}`,
+                    `bag-tag-${b.tag_number || b.id}.pdf`
+                  )
+                }
+              >
+                Bag tag {b.tag_number || b.id.slice(0, 8)}
+              </button>
+            ))}
           </div>
         </section>
       )}
@@ -858,7 +1047,42 @@ export default function CheckinPage() {
           <button type="button" onClick={() => void loadManifest()} disabled={manifestLoading}>
             {manifestLoading ? 'Loading…' : 'Load manifest'}
           </button>
+          <button type="button" className="secondary" onClick={() => void loadReconciliation()} disabled={reconciliationLoading}>
+            {reconciliationLoading ? 'Loading…' : 'Reconciliation'}
+          </button>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => void closeFlightCheckin()}
+            disabled={closeCheckinLoading || !flightIdManifest.trim()}
+          >
+            {closeCheckinLoading ? '…' : 'Close flight check-in'}
+          </button>
+          <button
+            type="button"
+            className="secondary"
+            onClick={() => void reopenFlightCheckin()}
+            disabled={closeCheckinLoading || !flightIdManifest.trim()}
+          >
+            {closeCheckinLoading ? '…' : 'Reopen check-in'}
+          </button>
         </div>
+        {reconciliation && (
+          <div
+            style={{
+              marginTop: '0.75rem',
+              padding: '0.75rem',
+              background: '#f1f5f9',
+              borderRadius: 8,
+              fontSize: '0.85rem'
+            }}
+          >
+            <strong>Reconciliation</strong>
+            <pre style={{ margin: '0.5rem 0 0', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+              {JSON.stringify(reconciliation.reconciliation, null, 2)}
+            </pre>
+          </div>
+        )}
         {manifest && (
           <div style={{ marginTop: '1rem', display: 'grid', gap: '1rem' }}>
             <div>
@@ -872,6 +1096,9 @@ export default function CheckinPage() {
                 {new Date(
                   String((manifest.flight as { boarding_display_time?: string }).boarding_display_time || '')
                 ).toLocaleString()}
+                {(manifest.flight as { checkin_closed_at?: string | null }).checkin_closed_at ? (
+                  <span style={{ color: '#b45309', fontWeight: 600 }}> · Passenger check-in closed</span>
+                ) : null}
               </div>
               <div style={{ fontSize: '0.85rem', color: '#64748b', marginTop: 4 }}>
                 Expected {manifest.summary.expectedCount} | Checked in {manifest.summary.checkedInCount} | Pending{' '}

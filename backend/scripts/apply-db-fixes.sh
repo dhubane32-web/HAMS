@@ -21,6 +21,7 @@ psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$ROOT/database/booking_ticketing.sql
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$ROOT/database/booking_ticketing_seed.sql"
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$ROOT/database/checkin_boarding.sql"
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$ROOT/database/checkin_boarding_module.sql"
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$ROOT/database/checkin_dcs_flight_close.sql"
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$ROOT/database/checkin_boarding_seed.sql"
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$ROOT/database/finance_accounting.sql"
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$ROOT/database/finance_seed_sample.sql"

@@ -52,6 +52,27 @@ async function main() {
   }
   console.log('OK GET /api/checkin/search type=pnr', searchPnrBody.booking.pnr);
 
+  const lookupBad = await fetch(
+    `${base}/api/checkin/lookup?pnr=BKTOW1&lastName=${encodeURIComponent('WrongName')}`,
+    { headers: auth }
+  );
+  if (lookupBad.status !== 404) {
+    console.error('FAIL GET /api/checkin/lookup wrong last name', lookupBad.status);
+    process.exit(1);
+  }
+  console.log('OK GET /api/checkin/lookup wrong last name → 404');
+
+  const lookupOk = await fetch(
+    `${base}/api/checkin/lookup?pnr=BKTOW1&lastName=${encodeURIComponent('Passenger')}`,
+    { headers: auth }
+  );
+  const lookupBody = await lookupOk.json().catch(() => ({}));
+  if (!lookupOk.ok || !lookupBody.booking || lookupBody.matchType !== 'PNR_LASTNAME') {
+    console.error('FAIL GET /api/checkin/lookup (Passenger)', lookupOk.status, lookupBody);
+    process.exit(1);
+  }
+  console.log('OK GET /api/checkin/lookup PNR+last name', lookupBody.booking.pnr);
+
   const ticketNo = pnrBody.passengers?.[0]?.legs?.[0]?.ticket_number;
   if (ticketNo) {
     const tRes = await fetch(`${base}/api/checkin/ticket/${encodeURIComponent(ticketNo)}`, { headers: auth });
@@ -101,6 +122,17 @@ async function main() {
     baggageKg: s.totalBaggageKg
   });
 
+  const recRes = await fetch(`${base}/api/checkin/flights/${flightId}/reconciliation`, { headers: auth });
+  const recBody = await recRes.json().catch(() => ({}));
+  if (!recRes.ok || !recBody.reconciliation || recBody.reconciliation.expected_pax == null) {
+    console.error('FAIL GET reconciliation', recRes.status, recBody);
+    process.exit(1);
+  }
+  console.log('OK GET reconciliation', {
+    expected: recBody.reconciliation.expected_pax,
+    checked_in: recBody.reconciliation.checked_in_total
+  });
+
   const firstChecked = pnrBody.passengers?.flatMap((p) => p.legs.map((l) => ({ p, l }))).find(({ l }) => l.checkin_id);
   if (firstChecked?.l?.boarding_pass_no) {
     const bpRes = await fetch(
@@ -113,6 +145,18 @@ async function main() {
       process.exit(1);
     }
     console.log('OK GET boarding-pass', bpBody.boardingPass.pnr, bpBody.boardingPass.seat);
+
+    const pdfRes = await fetch(
+      `${base}/api/checkin/documents/boarding-pass-pdf?ref=${encodeURIComponent(firstChecked.l.boarding_pass_no)}`,
+      { headers: auth }
+    );
+    const pdfCt = pdfRes.headers.get('content-type') || '';
+    if (!pdfRes.ok || !pdfCt.includes('application/pdf')) {
+      const t = await pdfRes.text().catch(() => '');
+      console.error('FAIL GET boarding-pass-pdf', pdfRes.status, pdfCt, t.slice(0, 200));
+      process.exit(1);
+    }
+    console.log('OK GET boarding-pass-pdf', 'bytes', (await pdfRes.arrayBuffer()).byteLength);
 
     const scanRes = await fetch(`${base}/api/boarding/scan`, {
       method: 'POST',
