@@ -14,10 +14,19 @@ import {
   sendEticketEmail,
   isSmtpConfigured
 } from '../../services/ticketDocuments.js';
+import {
+  ROLES_BOOKING_DESK,
+  ROLES_BOOKING_PAYMENTS,
+  ROLES_TICKET_ISSUE,
+  ROLES_TICKET_DOCS
+} from '../../lib/airlineRbac.js';
+import {
+  postTicketCommercialHooks,
+  recordPromoUsageRow,
+  syncCrmCustomersForBooking
+} from '../../services/salesCommercialSync.js';
 
 const router = express.Router();
-
-const ticketDocRoles = ['admin', 'super_admin', 'agent', 'customer_service', 'sales_manager', 'finance'];
 
 const allowedPnrChars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
@@ -53,7 +62,7 @@ async function generateTicketNumber(client) {
  */
 async function issueTicketsForBooking(client, bookingId, userId, { requirePaid = true } = {}) {
   const bookingResult = await client.query(
-    `SELECT id, pnr, booking_status, payment_status, total_amount, currency
+    `SELECT id, pnr, booking_status, payment_status, total_amount, currency, travel_agent_id, sales_channel_code
      FROM bookings WHERE id = $1`,
     [bookingId]
   );
@@ -128,6 +137,13 @@ async function issueTicketsForBooking(client, bookingId, userId, { requirePaid =
       metadata: { pnr: booking.pnr, newlyIssued },
       userId
     });
+    try {
+      await postTicketCommercialHooks(client, bookingId, userId);
+    } catch (e) {
+      if (process.env.NODE_ENV !== 'production') {
+        console.warn('[booking] postTicketCommercialHooks:', e?.message || e);
+      }
+    }
   }
 
   return { booking, tickets: issuedTickets, newlyIssued };
@@ -314,7 +330,7 @@ async function queryBookingListRows() {
 router.get(
   '/',
   requireAuth,
-  requireRoles('admin', 'super_admin', 'agent', 'operations', 'customer_service', 'sales_manager'),
+  requireRoles(...ROLES_BOOKING_DESK),
   async (_req, res) => {
     try {
       const result = await queryBookingListRows();
@@ -407,7 +423,7 @@ async function queryFlightsForSearch({ fromAir, toAir, travelDate, fareClassUuid
 router.get(
   '/flights/search',
   requireAuth,
-  requireRoles('admin', 'super_admin', 'agent', 'operations', 'customer_service', 'sales_manager'),
+  requireRoles(...ROLES_BOOKING_DESK),
   async (req, res) => {
     const { from, to, date, tripType, returnDate, fareClassId } = req.query;
 
@@ -471,7 +487,7 @@ router.get(
 router.get(
   '/flights/:flightId/availability',
   requireAuth,
-  requireRoles('admin', 'super_admin', 'agent', 'operations', 'customer_service', 'sales_manager'),
+  requireRoles(...ROLES_BOOKING_DESK),
   async (req, res) => {
     const { flightId } = req.params;
     if (!isUuid(flightId)) {
@@ -526,7 +542,7 @@ function roundMoney2(n) {
   return Math.round(Number(n) * 100) / 100;
 }
 
-router.post('/', requireAuth, requireRoles('admin', 'super_admin', 'agent', 'customer_service', 'sales_manager'), async (req, res) => {
+router.post('/', requireAuth, requireRoles(...ROLES_BOOKING_DESK), async (req, res) => {
   const {
     tripType = 'ONE_WAY',
     outboundFlightId,
@@ -545,11 +561,20 @@ router.post('/', requireAuth, requireRoles('admin', 'super_admin', 'agent', 'cus
     promoCode,
     campaignId,
     pricedTotalPerPax,
-    pricedCurrency
+    pricedCurrency,
+    salesChannel,
+    corporateAccountId,
+    travelAgentId
   } = req.body;
 
   const shouldCollectPayment = collectPayment !== false;
   const notesText = notes != null ? String(notes).trim().slice(0, 8000) : null;
+  const salesChannelCode = String(salesChannel || 'DIRECT_WEB')
+    .trim()
+    .toUpperCase()
+    .slice(0, 40);
+  const corpId = corporateAccountId && isUuid(String(corporateAccountId)) ? String(corporateAccountId) : null;
+  const taId = travelAgentId && isUuid(String(travelAgentId)) ? String(travelAgentId) : null;
 
   const normalizedTripType = String(tripType || 'ONE_WAY').toUpperCase();
   if (!['ONE_WAY', 'RETURN'].includes(normalizedTripType)) {
@@ -758,11 +783,13 @@ router.post('/', requireAuth, requireRoles('admin', 'super_admin', 'agent', 'cus
       `INSERT INTO bookings (
         pnr, trip_type, booking_status, total_amount, currency, created_by, payment_status, notes,
         promo_code_id, campaign_id, promo_discount_amount,
-        return_date, fare_breakdown, fare_base_total, fare_tax_total, fare_fee_total
+        return_date, fare_breakdown, fare_base_total, fare_tax_total, fare_fee_total,
+        sales_channel_code, corporate_account_id, travel_agent_id
       )
-       VALUES ($1, $2, $3, $4, $5, $6, 'UNPAID', $7, $8, $9, $10, $11, $12::jsonb, $13, $14, $15)
+       VALUES ($1, $2, $3, $4, $5, $6, 'UNPAID', $7, $8, $9, $10, $11, $12::jsonb, $13, $14, $15, $16, $17, $18)
        RETURNING id, pnr, trip_type, booking_status, payment_status, total_amount, currency, created_at, notes,
-         promo_code_id, campaign_id, promo_discount_amount, return_date, fare_breakdown, fare_base_total, fare_tax_total, fare_fee_total`,
+         promo_code_id, campaign_id, promo_discount_amount, return_date, fare_breakdown, fare_base_total, fare_tax_total, fare_fee_total,
+         sales_channel_code, corporate_account_id, travel_agent_id`,
       [
         pnr,
         normalizedTripType,
@@ -778,7 +805,10 @@ router.post('/', requireAuth, requireRoles('admin', 'super_admin', 'agent', 'cus
         JSON.stringify(fareSnap.fare_breakdown),
         fareSnap.fare_base_total,
         fareSnap.fare_tax_total,
-        fareSnap.fare_fee_total
+        fareSnap.fare_fee_total,
+        salesChannelCode,
+        corpId,
+        taId
       ]
     );
     const booking = bookingInsert.rows[0];
@@ -855,6 +885,14 @@ router.post('/', requireAuth, requireRoles('admin', 'super_admin', 'agent', 'cus
       );
     }
 
+    try {
+      await syncCrmCustomersForBooking(client, booking.id);
+    } catch (e) {
+      if (process.env.NODE_ENV !== 'production') {
+        console.warn('[booking] syncCrmCustomersForBooking:', e?.message || e);
+      }
+    }
+
     if (shouldCollectPayment) {
       const payIns = await client.query(
         `INSERT INTO payments (booking_id, payment_type, amount, currency, payment_status, transaction_ref, processed_by)
@@ -897,6 +935,17 @@ router.post('/', requireAuth, requireRoles('admin', 'super_admin', 'agent', 'cus
 
     if (promoCodeId) {
       await incrementPromoUsage(client, promoCodeId);
+      try {
+        await recordPromoUsageRow(client, {
+          promoCodeId,
+          bookingId: booking.id,
+          discountAmount: promoDiscountAmount
+        });
+      } catch (e) {
+        if (process.env.NODE_ENV !== 'production') {
+          console.warn('[booking] recordPromoUsageRow:', e?.message || e);
+        }
+      }
     }
 
     await client.query(
@@ -919,7 +968,10 @@ router.post('/', requireAuth, requireRoles('admin', 'super_admin', 'agent', 'cus
           baseTotalAmount,
           promoDiscountAmount,
           campaignId: campaignUuid,
-          promoCode: promoCode ? String(promoCode).trim() : null
+          promoCode: promoCode ? String(promoCode).trim() : null,
+          salesChannel: salesChannelCode,
+          corporateAccountId: corpId,
+          travelAgentId: taId
         })
       ]
     );
@@ -970,7 +1022,7 @@ router.post('/', requireAuth, requireRoles('admin', 'super_admin', 'agent', 'cus
   }
 });
 
-router.post('/:bookingId/tickets/issue', requireAuth, requireRoles('admin', 'super_admin', 'agent', 'customer_service', 'sales_manager'), async (req, res) => {
+router.post('/:bookingId/tickets/issue', requireAuth, requireRoles(...ROLES_TICKET_ISSUE), async (req, res) => {
   const { bookingId } = req.params;
   if (!isUuid(bookingId)) {
     return res.status(400).json({ message: 'Invalid booking id.' });
@@ -999,7 +1051,7 @@ router.post('/:bookingId/tickets/issue', requireAuth, requireRoles('admin', 'sup
        VALUES ($1, $2, $3, $4, $5)`,
       [
         req.user.userId,
-        'TICKETS_ISSUED',
+        'TICKET_ISSUED',
         'bookings',
         bookingId,
         JSON.stringify({ pnr: booking.pnr, ticketCount: issuedTickets.length })
@@ -1024,7 +1076,7 @@ router.post('/:bookingId/tickets/issue', requireAuth, requireRoles('admin', 'sup
 router.get(
   '/:bookingId/documents/tickets/:ticketId.pdf',
   requireAuth,
-  requireRoles(...ticketDocRoles),
+  requireRoles(...ROLES_TICKET_DOCS),
   async (req, res) => {
     const { bookingId, ticketId } = req.params;
     if (!isUuid(bookingId) || !isUuid(ticketId)) {
@@ -1049,7 +1101,7 @@ router.get(
 router.get(
   '/:bookingId/documents/invoice.pdf',
   requireAuth,
-  requireRoles(...ticketDocRoles),
+  requireRoles(...ROLES_TICKET_DOCS),
   async (req, res) => {
     const { bookingId } = req.params;
     if (!isUuid(bookingId)) {
@@ -1074,7 +1126,7 @@ router.get(
 router.get(
   '/:bookingId/documents/payments/:paymentId/receipt.pdf',
   requireAuth,
-  requireRoles(...ticketDocRoles),
+  requireRoles(...ROLES_TICKET_DOCS),
   async (req, res) => {
     const { bookingId, paymentId } = req.params;
     if (!isUuid(bookingId) || !isUuid(paymentId)) {
@@ -1105,7 +1157,7 @@ router.get(
 router.post(
   '/:bookingId/documents/tickets/:ticketId/email',
   requireAuth,
-  requireRoles(...ticketDocRoles),
+  requireRoles(...ROLES_TICKET_DOCS),
   async (req, res) => {
     const { bookingId, ticketId } = req.params;
     if (!isUuid(bookingId) || !isUuid(ticketId)) {
@@ -1149,7 +1201,7 @@ router.post(
   }
 );
 
-router.get('/pnr/:pnr', requireAuth, requireRoles('admin', 'super_admin', 'agent', 'operations', 'customer_service', 'sales_manager'), async (req, res) => {
+router.get('/pnr/:pnr', requireAuth, requireRoles(...ROLES_BOOKING_DESK), async (req, res) => {
   const { pnr } = req.params;
 
   try {
@@ -1214,7 +1266,7 @@ router.get('/pnr/:pnr', requireAuth, requireRoles('admin', 'super_admin', 'agent
 router.get(
   '/:bookingId',
   requireAuth,
-  requireRoles('admin', 'super_admin', 'agent', 'operations', 'customer_service', 'sales_manager'),
+  requireRoles(...ROLES_BOOKING_DESK),
   async (req, res) => {
     const { bookingId } = req.params;
     if (!isUuid(bookingId)) {
@@ -1284,7 +1336,7 @@ router.get(
 router.post(
   '/:bookingId/cancel',
   requireAuth,
-  requireRoles('admin', 'super_admin', 'agent', 'customer_service', 'sales_manager'),
+  requireRoles(...ROLES_BOOKING_DESK),
   async (req, res) => {
     const { bookingId } = req.params;
     if (!isUuid(bookingId)) {
@@ -1332,7 +1384,7 @@ router.post(
 router.post(
   '/:bookingId/payments',
   requireAuth,
-  requireRoles('admin', 'super_admin', 'agent', 'customer_service', 'sales_manager', 'finance'),
+  requireRoles(...ROLES_BOOKING_PAYMENTS),
   async (req, res) => {
     const { bookingId } = req.params;
     if (!isUuid(bookingId)) {
@@ -1434,7 +1486,7 @@ router.post(
 router.put(
   '/:bookingId',
   requireAuth,
-  requireRoles('admin', 'super_admin', 'agent', 'customer_service', 'sales_manager'),
+  requireRoles(...ROLES_BOOKING_DESK),
   async (req, res) => {
     const { bookingId } = req.params;
     if (!isUuid(bookingId)) {

@@ -2,13 +2,18 @@ import express from 'express';
 import { pool } from '../../config/db.js';
 import { requireAuth, requireRoles } from '../../middleware/auth.js';
 import { userHasAnyRole } from '../../lib/roles.js';
+import { ROLES_FINANCE_ORG, ROLES_REFUND_QUEUE, ROLES_REFUND_REQUEST } from '../../lib/airlineRbac.js';
 import { logFinanceTransaction } from '../../services/financeLedger.js';
 import { syncBookingPaymentStatus } from '../../services/bookingPaymentSync.js';
 
 const router = express.Router();
 
 function canViewAllFinance(role) {
-  return userHasAnyRole(role, ['admin', 'super_admin', 'finance', 'sales_manager']);
+  return userHasAnyRole(role, ['admin', 'finance', 'sales_manager']);
+}
+
+function isDeskRefundRequester(role) {
+  return role === 'agent' || role === 'booking_agent';
 }
 
 function csvEscape(v) {
@@ -31,43 +36,37 @@ router.get('/health', (_req, res) => {
   res.json({ module: 'finance', status: 'ready' });
 });
 
-/** Summary cards: admin, finance, sales_manager see all; agent sees own-sales slice only. */
-router.get('/dashboard', requireAuth, requireRoles('admin', 'super_admin', 'finance', 'sales_manager', 'agent'), async (req, res) => {
+/** Summary cards: finance leadership and admin (desk agents use booking module, not finance dashboard). */
+router.get('/dashboard', requireAuth, requireRoles(...ROLES_FINANCE_ORG), async (req, res) => {
   const role = req.user.role;
-  const agentOnly = role === 'agent';
-  const uid = req.user.userId;
   const today = new Date().toISOString().slice(0, 10);
   const monthStart = `${today.slice(0, 7)}-01`;
 
   try {
-    const scopeAgent = agentOnly ? 'AND b.created_by = $1::uuid' : '';
-
     const settled = await Promise.allSettled([
       pool.query(
         `SELECT COALESCE(SUM(p.amount - COALESCE(rf.refunded, 0)), 0)::numeric AS v
          FROM payments p
          JOIN bookings b ON b.id = p.booking_id
          LEFT JOIN (SELECT payment_id, SUM(refund_amount)::numeric AS refunded FROM refunds GROUP BY payment_id) rf ON rf.payment_id = p.id
-         WHERE DATE(p.processed_at) = DATE($${agentOnly ? 2 : 1}::date)
-           AND UPPER(TRIM(p.payment_status)) IN ('PAID', 'SUCCESS', 'PARTIALLY_REFUNDED', 'REFUNDED')
-           ${scopeAgent}`,
-        agentOnly ? [uid, today] : [today]
+         WHERE DATE(p.processed_at) = DATE($1::date)
+           AND UPPER(TRIM(p.payment_status)) IN ('PAID', 'SUCCESS', 'PARTIALLY_REFUNDED', 'REFUNDED')`,
+        [today]
       ),
       pool.query(
         `SELECT COALESCE(SUM(r.refund_amount), 0)::numeric AS v
          FROM refunds r
          JOIN payments p ON p.id = r.payment_id
          JOIN bookings b ON b.id = p.booking_id
-         WHERE DATE(r.refunded_at) = DATE($${agentOnly ? 2 : 1}::date) ${agentOnly ? 'AND b.created_by = $1::uuid' : ''}`,
-        agentOnly ? [uid, today] : [today]
+         WHERE DATE(r.refunded_at) = DATE($1::date)`,
+        [today]
       ),
       pool.query(
         `SELECT COUNT(*)::int AS c, COALESCE(SUM(b.total_amount), 0)::numeric AS gross
          FROM bookings b
          WHERE UPPER(TRIM(b.booking_status)) <> 'CANCELLED'
-           AND UPPER(TRIM(b.payment_status)) IN ('UNPAID', 'PARTIALLY_PAID')
-           ${agentOnly ? 'AND b.created_by = $1::uuid' : ''}`,
-        agentOnly ? [uid] : []
+           AND UPPER(TRIM(b.payment_status)) IN ('UNPAID', 'PARTIALLY_PAID')`,
+        []
       ),
       canViewAllFinance(role)
         ? pool.query(`SELECT COUNT(*)::int AS c FROM refund_requests WHERE status = 'PENDING'`)
@@ -77,10 +76,9 @@ router.get('/dashboard', requireAuth, requireRoles('admin', 'super_admin', 'fina
          FROM tickets t
          JOIN bookings b ON b.id = t.booking_id
          JOIN booking_flights bf ON bf.booking_id = b.id
-         WHERE t.issued_at >= $${agentOnly ? 2 : 1}::date
-           AND t.issued_at < ($${agentOnly ? 2 : 1}::date + INTERVAL '1 month')
-           ${agentOnly ? 'AND b.created_by = $1::uuid' : ''}`,
-        agentOnly ? [uid, monthStart] : [monthStart]
+         WHERE t.issued_at >= $1::date
+           AND t.issued_at < ($1::date + INTERVAL '1 month')`,
+        [monthStart]
       ),
       canViewAllFinance(role)
         ? pool.query(
@@ -121,7 +119,7 @@ router.get('/dashboard', requireAuth, requireRoles('admin', 'super_admin', 'fina
 
     return res.status(200).json({
       asOf: today,
-      scope: agentOnly ? 'agent_own_sales' : 'organization',
+      scope: 'organization',
       cards: {
         netPaymentsToday: payToday - refToday,
         refundsToday: refToday,
@@ -140,11 +138,9 @@ router.get('/dashboard', requireAuth, requireRoles('admin', 'super_admin', 'fina
 router.get(
   '/payments',
   requireAuth,
-  requireRoles('admin', 'finance', 'sales_manager', 'agent'),
+  requireRoles(...ROLES_FINANCE_ORG),
   async (req, res) => {
     const { date, status, export: exportCsv } = req.query;
-    const role = req.user.role;
-    const agentOnly = role === 'agent';
 
     try {
       const filters = [];
@@ -156,10 +152,6 @@ router.get(
       if (status) {
         values.push(String(status).toUpperCase());
         filters.push(`UPPER(TRIM(p.payment_status)) = $${values.length}`);
-      }
-      if (agentOnly) {
-        values.push(req.user.userId);
-        filters.push(`b.created_by = $${values.length}::uuid`);
       }
 
       const whereClause = filters.length > 0 ? `WHERE ${filters.join(' AND ')}` : '';
@@ -307,7 +299,7 @@ router.get('/expenses', requireAuth, requireRoles('admin', 'finance'), async (re
 router.post(
   '/refund-requests',
   requireAuth,
-  requireRoles('admin', 'finance', 'agent', 'customer_service', 'sales_manager'),
+  requireRoles(...ROLES_REFUND_REQUEST),
   async (req, res) => {
     const { paymentId, refundAmount, reason } = req.body;
     const amount = Number(refundAmount);
@@ -330,7 +322,7 @@ router.post(
         await client.query('ROLLBACK');
         return res.status(404).json({ message: 'Payment not found.' });
       }
-      if (req.user.role === 'agent' && String(p.created_by) !== String(req.user.userId)) {
+      if (isDeskRefundRequester(req.user.role) && String(p.created_by) !== String(req.user.userId)) {
         await client.query('ROLLBACK');
         return res.status(403).json({ message: 'You can only request refunds for your own sales.' });
       }
@@ -390,7 +382,7 @@ router.post(
   }
 );
 
-router.get('/refund-requests', requireAuth, requireRoles('admin', 'finance', 'agent', 'customer_service', 'sales_manager'), async (req, res) => {
+router.get('/refund-requests', requireAuth, requireRoles(...ROLES_REFUND_QUEUE), async (req, res) => {
   const status = req.query.status ? String(req.query.status).toUpperCase() : null;
   const role = req.user.role;
   try {
@@ -400,7 +392,7 @@ router.get('/refund-requests', requireAuth, requireRoles('admin', 'finance', 'ag
       vals.push(status);
       filters.push(`rr.status = $${vals.length}`);
     }
-    if (role === 'agent') {
+    if (isDeskRefundRequester(role)) {
       vals.push(req.user.userId);
       filters.push(`rr.requested_by = $${vals.length}::uuid`);
     }
@@ -578,25 +570,18 @@ router.post('/refunds', requireAuth, requireRoles('admin', 'finance'), async (_r
   });
 });
 
-router.get('/reports/daily', requireAuth, requireRoles('admin', 'finance', 'sales_manager', 'agent'), async (req, res) => {
+router.get('/reports/daily', requireAuth, requireRoles(...ROLES_FINANCE_ORG), async (req, res) => {
   const reportDate = String(req.query.date || new Date().toISOString().slice(0, 10));
-  const role = req.user.role;
-  const agentOnly = role === 'agent';
-  const uid = req.user.userId;
 
   try {
-    const scope = agentOnly ? 'AND b.created_by = $2::uuid' : '';
-    const params = agentOnly ? [reportDate, uid] : [reportDate];
-
     const totalsResult = await pool.query(
       `SELECT COALESCE(SUM(p.amount - COALESCE(rf.refunded, 0)), 0)::numeric AS total_collected, COUNT(*)::int AS payment_count
        FROM payments p
        JOIN bookings b ON b.id = p.booking_id
        LEFT JOIN (SELECT payment_id, SUM(refund_amount)::numeric AS refunded FROM refunds GROUP BY payment_id) rf ON rf.payment_id = p.id
        WHERE DATE(p.processed_at) = DATE($1::date)
-         AND UPPER(TRIM(p.payment_status)) IN ('PAID', 'SUCCESS', 'PARTIALLY_REFUNDED', 'REFUNDED')
-         ${scope}`,
-      params
+         AND UPPER(TRIM(p.payment_status)) IN ('PAID', 'SUCCESS', 'PARTIALLY_REFUNDED', 'REFUNDED')`,
+      [reportDate]
     );
 
     const refundsResult = await pool.query(
@@ -604,8 +589,8 @@ router.get('/reports/daily', requireAuth, requireRoles('admin', 'finance', 'sale
        FROM refunds r
        JOIN payments p ON p.id = r.payment_id
        JOIN bookings b ON b.id = p.booking_id
-       WHERE DATE(r.refunded_at) = DATE($1::date) ${scope}`,
-      params
+       WHERE DATE(r.refunded_at) = DATE($1::date)`,
+      [reportDate]
     );
 
     const totalCollected = Number(totalsResult.rows[0].total_collected);
@@ -626,14 +611,9 @@ router.get('/reports/daily', requireAuth, requireRoles('admin', 'finance', 'sale
   }
 });
 
-router.get('/reports/cash', requireAuth, requireRoles('admin', 'finance', 'sales_manager', 'agent'), async (req, res) => {
+router.get('/reports/cash', requireAuth, requireRoles(...ROLES_FINANCE_ORG), async (req, res) => {
   const from = String(req.query.from || new Date().toISOString().slice(0, 10));
   const to = String(req.query.to || from);
-  const role = req.user.role;
-  const agentOnly = role === 'agent';
-  const uid = req.user.userId;
-  const scope = agentOnly ? 'AND b.created_by = $3::uuid' : '';
-  const params = agentOnly ? [from, to, uid] : [from, to];
 
   try {
     const rows = await pool.query(
@@ -643,10 +623,9 @@ router.get('/reports/cash', requireAuth, requireRoles('admin', 'finance', 'sales
        FROM payments p
        JOIN bookings b ON b.id = p.booking_id
        WHERE DATE(p.processed_at) >= DATE($1::date) AND DATE(p.processed_at) <= DATE($2::date)
-         ${scope}
        GROUP BY DATE(p.processed_at)
        ORDER BY day ASC`,
-      params
+      [from, to]
     );
 
     const refunds = await pool.query(
@@ -655,10 +634,9 @@ router.get('/reports/cash', requireAuth, requireRoles('admin', 'finance', 'sales
        JOIN payments p ON p.id = r.payment_id
        JOIN bookings b ON b.id = p.booking_id
        WHERE DATE(r.refunded_at) >= DATE($1::date) AND DATE(r.refunded_at) <= DATE($2::date)
-         ${scope}
        GROUP BY DATE(r.refunded_at)
        ORDER BY day ASC`,
-      params
+      [from, to]
     );
 
     return res.status(200).json({ from, to, paymentsByDay: rows.rows, refundsByDay: refunds.rows });
@@ -667,9 +645,7 @@ router.get('/reports/cash', requireAuth, requireRoles('admin', 'finance', 'sales
   }
 });
 
-router.get('/reports/outstanding-balances', requireAuth, requireRoles('admin', 'finance', 'sales_manager', 'agent'), async (req, res) => {
-  const role = req.user.role;
-  const agentOnly = role === 'agent';
+router.get('/reports/outstanding-balances', requireAuth, requireRoles(...ROLES_FINANCE_ORG), async (_req, res) => {
   try {
     const r = await pool.query(
       `SELECT b.id, b.pnr, b.total_amount, b.currency, b.payment_status, b.booking_status, b.created_at,
@@ -680,11 +656,10 @@ router.get('/reports/outstanding-balances', requireAuth, requireRoles('admin', '
        LEFT JOIN booking_flights bf ON bf.booking_id = b.id
        WHERE UPPER(TRIM(b.booking_status)) <> 'CANCELLED'
          AND UPPER(TRIM(b.payment_status)) IN ('UNPAID', 'PARTIALLY_PAID')
-         ${agentOnly ? 'AND b.created_by = $1::uuid' : ''}
        GROUP BY b.id, u.full_name
        ORDER BY b.created_at DESC
        LIMIT 2000`,
-      agentOnly ? [req.user.userId] : []
+      []
     );
     return res.status(200).json({ bookings: r.rows });
   } catch (error) {
@@ -692,15 +667,14 @@ router.get('/reports/outstanding-balances', requireAuth, requireRoles('admin', '
   }
 });
 
-router.get('/reports/agent-sales', requireAuth, requireRoles('admin', 'finance', 'sales_manager', 'agent'), async (req, res) => {
+router.get('/reports/agent-sales', requireAuth, requireRoles(...ROLES_FINANCE_ORG), async (req, res) => {
   const from = String(req.query.from || new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10));
   const to = String(req.query.to || new Date().toISOString().slice(0, 10));
   const agentId = req.query.agentId ? String(req.query.agentId) : null;
   const role = req.user.role;
 
   let filterAgent = null;
-  if (role === 'agent') filterAgent = req.user.userId;
-  else if (agentId && canViewAllFinance(role)) filterAgent = agentId;
+  if (agentId && canViewAllFinance(role)) filterAgent = agentId;
 
   try {
     const vals = [from, to];
@@ -722,7 +696,7 @@ router.get('/reports/agent-sales', requireAuth, requireRoles('admin', 'finance',
        FROM bookings b
        JOIN users u ON u.id = b.created_by
        WHERE DATE(b.created_at) >= DATE($1::date) AND DATE(b.created_at) <= DATE($2::date)
-         AND u.role = 'agent'::user_role
+         AND u.role::text IN ('agent', 'booking_agent')
          ${extra}
        GROUP BY b.created_by, u.full_name
        ORDER BY booked_gross DESC NULLS LAST`,
@@ -735,13 +709,9 @@ router.get('/reports/agent-sales', requireAuth, requireRoles('admin', 'finance',
   }
 });
 
-router.get('/reports/daily-revenue', requireAuth, requireRoles('admin', 'finance', 'sales_manager', 'agent'), async (req, res) => {
+router.get('/reports/daily-revenue', requireAuth, requireRoles(...ROLES_FINANCE_ORG), async (req, res) => {
   const from = String(req.query.from || new Date(Date.now() - 14 * 86400000).toISOString().slice(0, 10));
   const to = String(req.query.to || new Date().toISOString().slice(0, 10));
-  const role = req.user.role;
-  const agentOnly = role === 'agent';
-  const scope = agentOnly ? 'AND b.created_by = $3::uuid' : '';
-  const params = agentOnly ? [from, to, req.user.userId] : [from, to];
 
   try {
     const r = await pool.query(
@@ -752,10 +722,9 @@ router.get('/reports/daily-revenue', requireAuth, requireRoles('admin', 'finance
        LEFT JOIN (SELECT payment_id, SUM(refund_amount)::numeric AS refunded FROM refunds GROUP BY payment_id) rf ON rf.payment_id = p.id
        WHERE DATE(p.processed_at) >= DATE($1::date) AND DATE(p.processed_at) <= DATE($2::date)
          AND UPPER(TRIM(p.payment_status)) IN ('PAID', 'SUCCESS', 'PARTIALLY_REFUNDED', 'REFUNDED')
-         ${scope}
        GROUP BY DATE(p.processed_at)
        ORDER BY day ASC`,
-      params
+      [from, to]
     );
     return res.status(200).json({ from, to, series: r.rows });
   } catch (error) {
@@ -763,13 +732,9 @@ router.get('/reports/daily-revenue', requireAuth, requireRoles('admin', 'finance
   }
 });
 
-router.get('/reports/route-revenue', requireAuth, requireRoles('admin', 'finance', 'sales_manager', 'agent'), async (req, res) => {
+router.get('/reports/route-revenue', requireAuth, requireRoles(...ROLES_FINANCE_ORG), async (req, res) => {
   const from = String(req.query.from || new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10));
   const to = String(req.query.to || new Date().toISOString().slice(0, 10));
-  const role = req.user.role;
-  const agentOnly = role === 'agent';
-  const scope = agentOnly ? 'AND b.created_by = $3::uuid' : '';
-  const params = agentOnly ? [from, to, req.user.userId] : [from, to];
 
   try {
     const r = await pool.query(
@@ -780,10 +745,9 @@ router.get('/reports/route-revenue', requireAuth, requireRoles('admin', 'finance
        JOIN flights f ON f.id = bf.flight_id
        JOIN bookings b ON b.id = bf.booking_id
        WHERE DATE(b.created_at) >= DATE($1::date) AND DATE(b.created_at) <= DATE($2::date)
-         ${scope}
        GROUP BY f.departure_airport, f.arrival_airport
        ORDER BY ticket_fare_sum DESC`,
-      params
+      [from, to]
     );
     return res.status(200).json({ from, to, routes: r.rows });
   } catch (error) {
@@ -791,13 +755,9 @@ router.get('/reports/route-revenue', requireAuth, requireRoles('admin', 'finance
   }
 });
 
-router.get('/reports/ticket-revenue', requireAuth, requireRoles('admin', 'finance', 'sales_manager', 'agent'), async (req, res) => {
+router.get('/reports/ticket-revenue', requireAuth, requireRoles(...ROLES_FINANCE_ORG), async (req, res) => {
   const from = String(req.query.from || new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10));
   const to = String(req.query.to || new Date().toISOString().slice(0, 10));
-  const role = req.user.role;
-  const agentOnly = role === 'agent';
-  const scope = agentOnly ? 'AND b.created_by = $3::uuid' : '';
-  const params = agentOnly ? [from, to, req.user.userId] : [from, to];
 
   try {
     const r2 = await pool.query(
@@ -808,10 +768,9 @@ router.get('/reports/ticket-revenue', requireAuth, requireRoles('admin', 'financ
        JOIN bookings b ON b.id = t.booking_id
        JOIN booking_flights bf ON bf.booking_id = b.id
        WHERE DATE(t.issued_at) >= DATE($1::date) AND DATE(t.issued_at) <= DATE($2::date)
-         ${scope}
        GROUP BY DATE(t.issued_at)
        ORDER BY day ASC`,
-      params
+      [from, to]
     );
     return res.status(200).json({ from, to, byDay: r2.rows });
   } catch (error) {
@@ -819,7 +778,7 @@ router.get('/reports/ticket-revenue', requireAuth, requireRoles('admin', 'financ
   }
 });
 
-router.get('/reports/flight-profitability', requireAuth, requireRoles('admin', 'finance', 'sales_manager'), async (req, res) => {
+router.get('/reports/flight-profitability', requireAuth, requireRoles(...ROLES_FINANCE_ORG), async (req, res) => {
   const from = String(req.query.from || new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10));
   const to = String(req.query.to || new Date().toISOString().slice(0, 10));
 
@@ -851,7 +810,7 @@ router.get('/reports/flight-profitability', requireAuth, requireRoles('admin', '
   }
 });
 
-router.get('/reports/sales-reconciliation', requireAuth, requireRoles('admin', 'finance', 'sales_manager'), async (req, res) => {
+router.get('/reports/sales-reconciliation', requireAuth, requireRoles(...ROLES_FINANCE_ORG), async (req, res) => {
   const from = String(req.query.from || new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10));
   const to = String(req.query.to || new Date().toISOString().slice(0, 10));
 

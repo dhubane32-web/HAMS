@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { CSSProperties } from 'react';
+import ConfirmModal from '@/components/ui/ConfirmModal';
 import { getPublicApiBaseUrl } from '@/lib/api-base';
 import {
   downloadBookingInvoicePdf,
@@ -46,7 +47,13 @@ type BookingResponse = {
       breakdown?: Array<{ code: string; label: string; amount: number; type?: string }>;
     };
   };
-  tickets?: Array<{ id: string; ticket_number: string; issued_at?: string; passenger_id?: string }>;
+  tickets?: Array<{
+    id: string;
+    ticket_number: string;
+    issued_at?: string;
+    passenger_id?: string;
+    ticket_status?: string;
+  }>;
 };
 
 type TicketResponse = {
@@ -119,6 +126,8 @@ export default function BookingPage() {
   const [isRecordingPayment, setIsRecordingPayment] = useState(false);
   const [docAction, setDocAction] = useState<string | null>(null);
   const [docMessage, setDocMessage] = useState('');
+  const [issueTicketModalOpen, setIssueTicketModalOpen] = useState(false);
+  const [issueTicketSubmitting, setIssueTicketSubmitting] = useState(false);
 
   function getToken() {
     return localStorage.getItem('hams_token');
@@ -478,6 +487,10 @@ export default function BookingPage() {
           bookingId: bookingSuccess.booking.id,
           tickets: data.tickets as TicketResponse['tickets']
         });
+        setBookingSuccess((prev) =>
+          prev ? { ...prev, tickets: data.tickets as BookingResponse['tickets'] } : prev
+        );
+        setIssueTicketModalOpen(false);
       }
     } catch {
       setBookingError('Unable to record payment.');
@@ -486,16 +499,39 @@ export default function BookingPage() {
     }
   }
 
-  async function handleIssueTicket() {
-    if (!bookingSuccess?.booking.id) {
-      return;
-    }
-    if (String(bookingSuccess.booking.payment_status || '').toUpperCase() !== 'PAID') {
-      setBookingError('Tickets can only be issued after the booking is fully paid.');
-      return;
-    }
-    setBookingError('');
+  const passengerCountForTickets = bookingSuccess?.booking?.fare?.passengerCount ?? 1;
+  const mergedTickets = useMemo(() => {
+    if (ticketInfo?.tickets?.length) return ticketInfo.tickets;
+    return bookingSuccess?.tickets ?? [];
+  }, [ticketInfo, bookingSuccess?.tickets]);
 
+  const allTicketsIssued = useMemo(() => {
+    if (!bookingSuccess?.booking?.id) return false;
+    if (mergedTickets.length < passengerCountForTickets) return false;
+    return mergedTickets.every((t) => String(t.ticket_status || 'ISSUED').toUpperCase() === 'ISSUED');
+  }, [bookingSuccess?.booking?.id, mergedTickets, passengerCountForTickets]);
+
+  const paidForBooking = String(bookingSuccess?.booking.payment_status || '').toUpperCase() === 'PAID';
+
+  const routeLabelForModal = useMemo(() => {
+    if (!bookingSuccess?.booking) return '—';
+    const o = bookingSuccess.booking.outboundFlight;
+    const leg = `${o.departure_airport}→${o.arrival_airport}`;
+    const inc = bookingSuccess.booking.inboundFlight;
+    if (!inc) return leg;
+    return `${leg} / ${inc.departure_airport}→${inc.arrival_airport}`;
+  }, [bookingSuccess]);
+
+  const primaryPassengerLabel =
+    passengerCountForTickets > 1
+      ? `${passengerFullName.trim()} (+ ${passengerCountForTickets - 1} more passenger(s))`
+      : passengerFullName.trim();
+
+  async function issueTicketAfterConfirm() {
+    if (!bookingSuccess?.booking.id) return;
+    if (!paidForBooking) return;
+    setBookingError('');
+    setIssueTicketSubmitting(true);
     try {
       const token = getToken();
       if (!token) {
@@ -519,8 +555,12 @@ export default function BookingPage() {
         bookingId: bookingSuccess.booking.id,
         tickets: result.tickets
       });
+      setIssueTicketModalOpen(false);
+      setDocMessage('');
     } catch {
       setBookingError('Unable to issue ticket.');
+    } finally {
+      setIssueTicketSubmitting(false);
     }
   }
 
@@ -985,27 +1025,78 @@ export default function BookingPage() {
                 {isRecordingPayment ? 'Recording…' : `Record full payment (${bookingSuccess.booking.total_amount})`}
               </button>
             )}
-            <button
-              type="button"
-              onClick={handleIssueTicket}
-              disabled={String(bookingSuccess.booking.payment_status || '').toUpperCase() !== 'PAID'}
-              style={{
-                ...buttonStyle,
-                marginTop: '0.75rem',
-                width: 'auto',
-                opacity: String(bookingSuccess.booking.payment_status || '').toUpperCase() !== 'PAID' ? 0.45 : 1
-              }}
-            >
-              Issue Ticket
-            </button>
-            {String(bookingSuccess.booking.payment_status || '').toUpperCase() !== 'PAID' && (
-              <p style={{ ...errorStyle, margin: '0.35rem 0 0', fontSize: '0.85rem' }}>
-                Issue ticket is disabled until payment status is PAID.
-              </p>
+            {allTicketsIssued ? (
+              <p style={{ marginTop: '0.75rem', fontWeight: 700, color: '#047857' }}>Ticket Issued</p>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setBookingError('');
+                    setIssueTicketModalOpen(true);
+                  }}
+                  disabled={issueTicketSubmitting}
+                  style={{
+                    ...buttonStyle,
+                    marginTop: '0.75rem',
+                    width: 'auto'
+                  }}
+                >
+                  Issue Ticket
+                </button>
+                {!paidForBooking ? (
+                  <p style={{ ...errorStyle, margin: '0.35rem 0 0', fontSize: '0.85rem' }}>
+                    Payment must be completed before ticket issuance. Use Record full payment above, then confirm in the
+                    dialog.
+                  </p>
+                ) : null}
+              </>
             )}
           </div>
         )}
       </section>
+
+      <ConfirmModal
+        open={issueTicketModalOpen && Boolean(bookingSuccess?.booking.id)}
+        title="Confirm Ticket Issuance"
+        message="Are you sure you want to issue this ticket? Once issued, this ticket number will be generated and the booking status will change to ISSUED."
+        confirmText="Confirm Issue Ticket"
+        confirmDisabled={!paidForBooking || issueTicketSubmitting}
+        warning={
+          !paidForBooking ? 'Payment must be completed before ticket issuance.' : undefined
+        }
+        onCancel={() => {
+          if (!issueTicketSubmitting) setIssueTicketModalOpen(false);
+        }}
+        onConfirm={() => void issueTicketAfterConfirm()}
+      >
+        {bookingSuccess?.booking ? (
+          <dl
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'max-content 1fr',
+              gap: '0.35rem 1rem',
+              fontSize: '0.88rem',
+              margin: 0
+            }}
+          >
+            <dt style={{ color: '#64748b' }}>PNR</dt>
+            <dd style={{ margin: 0 }}>{bookingSuccess.booking.pnr}</dd>
+            <dt style={{ color: '#64748b' }}>Passenger name</dt>
+            <dd style={{ margin: 0 }}>{primaryPassengerLabel || '—'}</dd>
+            <dt style={{ color: '#64748b' }}>Route</dt>
+            <dd style={{ margin: 0 }}>{routeLabelForModal}</dd>
+            <dt style={{ color: '#64748b' }}>Trip type</dt>
+            <dd style={{ margin: 0 }}>{bookingSuccess.booking.trip_type === 'RETURN' ? 'Return' : 'One way'}</dd>
+            <dt style={{ color: '#64748b' }}>Total fare</dt>
+            <dd style={{ margin: 0 }}>
+              {bookingSuccess.booking.total_amount} {bookingSuccess.booking.currency}
+            </dd>
+            <dt style={{ color: '#64748b' }}>Payment status</dt>
+            <dd style={{ margin: 0 }}>{String(bookingSuccess.booking.payment_status || '—').toUpperCase()}</dd>
+          </dl>
+        ) : null}
+      </ConfirmModal>
 
       {ticketInfo?.bookingId && (
         <section style={cardStyle}>

@@ -5,7 +5,10 @@ import { computeItineraryPricing } from '../../services/masterDataPricing.js';
 
 const router = express.Router();
 const writeAdmin = [requireAuth, requireRoles('admin')];
-const readCatalog = [requireAuth, requireRoles('admin', 'agent', 'operations', 'customer_service', 'sales_manager')];
+const readCatalog = [
+  requireAuth,
+  requireRoles('admin', 'agent', 'booking_agent', 'checkin_agent', 'operations', 'customer_service', 'sales_manager')
+];
 
 async function catalogRows(label, queryText, params = []) {
   try {

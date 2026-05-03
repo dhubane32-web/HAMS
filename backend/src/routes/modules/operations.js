@@ -2,6 +2,12 @@ import express from 'express';
 import { pool } from '../../config/db.js';
 import { requireAuth, requireRoles } from '../../middleware/auth.js';
 import {
+  ROLES_OPS_READ,
+  ROLES_OPS_FLIGHTS_LIST,
+  ROLES_OPS_FLIGHT_DETAIL,
+  ROLES_OPS_WRITE
+} from '../../lib/airlineRbac.js';
+import {
   assertCrewAssignableForFlight,
   recordDutyAfterAssignment,
   deleteDutyLogForAssignment,
@@ -187,7 +193,7 @@ async function loadOperationsDashboard(dateStr) {
 router.get(
   '/dashboard/today',
   requireAuth,
-  requireRoles('admin', 'super_admin', 'operations', 'maintenance', 'agent', 'customer_service'),
+  requireRoles(...ROLES_OPS_READ),
   async (_req, res) => {
     const today = new Date().toISOString().slice(0, 10);
     try {
@@ -202,7 +208,7 @@ router.get(
 router.get(
   '/dashboard',
   requireAuth,
-  requireRoles('admin', 'super_admin', 'operations', 'maintenance', 'agent', 'customer_service'),
+  requireRoles(...ROLES_OPS_READ),
   async (req, res) => {
     const raw = req.query.date ? String(req.query.date).trim().slice(0, 10) : new Date().toISOString().slice(0, 10);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
@@ -220,7 +226,7 @@ router.get(
 router.get(
   '/routes',
   requireAuth,
-  requireRoles('admin', 'super_admin', 'operations', 'maintenance', 'agent', 'customer_service'),
+  requireRoles(...ROLES_OPS_READ),
   async (req, res) => {
     const activeOnly = String(req.query.active || '').toLowerCase() === 'true';
     try {
@@ -240,7 +246,7 @@ router.get(
 router.post(
   '/routes',
   requireAuth,
-  requireRoles('admin', 'super_admin', 'operations'),
+  requireRoles(...ROLES_OPS_WRITE),
   async (req, res) => {
     const { originAirport, destAirport, label } = req.body;
     const o = String(originAirport || '').trim().toUpperCase();
@@ -277,7 +283,7 @@ router.post(
 router.put(
   '/routes/:routeId',
   requireAuth,
-  requireRoles('admin', 'super_admin', 'operations'),
+  requireRoles(...ROLES_OPS_WRITE),
   async (req, res) => {
     const { routeId } = req.params;
     if (!isUuid(routeId)) {
@@ -314,7 +320,7 @@ router.put(
 router.delete(
   '/routes/:routeId',
   requireAuth,
-  requireRoles('admin', 'super_admin', 'operations'),
+  requireRoles(...ROLES_OPS_WRITE),
   async (req, res) => {
     const { routeId } = req.params;
     if (!isUuid(routeId)) {
@@ -337,7 +343,7 @@ router.delete(
 router.get(
   '/flights',
   requireAuth,
-  requireRoles('admin', 'super_admin', 'operations', 'maintenance', 'agent', 'customer_service'),
+  requireRoles(...ROLES_OPS_FLIGHTS_LIST),
   async (req, res) => {
     const queryDate = req.query.date ? String(req.query.date) : null;
 
@@ -385,7 +391,7 @@ router.get(
 router.get(
   '/flights/suggest-flight-number',
   requireAuth,
-  requireRoles('admin', 'super_admin', 'operations', 'maintenance', 'agent'),
+  requireRoles(...ROLES_OPS_WRITE),
   async (_req, res) => {
     try {
       const r = await pool.query(
@@ -407,7 +413,7 @@ router.get(
 router.get(
   '/flights/recent',
   requireAuth,
-  requireRoles('admin', 'super_admin', 'operations', 'maintenance', 'agent', 'customer_service'),
+  requireRoles(...ROLES_OPS_READ),
   async (req, res) => {
     const raw = parseInt(String(req.query.limit || '40'), 10);
     const limit = Number.isFinite(raw) ? Math.min(100, Math.max(5, raw)) : 40;
@@ -444,7 +450,7 @@ router.get(
   }
 );
 
-router.get('/aircraft', requireAuth, requireRoles('admin', 'super_admin', 'operations', 'maintenance', 'agent'), async (_req, res) => {
+router.get('/aircraft', requireAuth, requireRoles(...ROLES_OPS_READ), async (_req, res) => {
   try {
     const aircraft = await pool.query(
       `SELECT id, tail_number, model, seat_capacity, release_status
@@ -457,7 +463,7 @@ router.get('/aircraft', requireAuth, requireRoles('admin', 'super_admin', 'opera
   }
 });
 
-router.get('/crew', requireAuth, requireRoles('admin', 'super_admin', 'operations', 'maintenance', 'agent'), async (_req, res) => {
+router.get('/crew', requireAuth, requireRoles(...ROLES_OPS_READ), async (_req, res) => {
   try {
     const crew = await pool.query(
       `SELECT id, full_name, email, role
@@ -471,7 +477,7 @@ router.get('/crew', requireAuth, requireRoles('admin', 'super_admin', 'operation
   }
 });
 
-router.post('/flights', requireAuth, requireRoles('admin', 'super_admin', 'operations'), async (req, res) => {
+router.post('/flights', requireAuth, requireRoles(...ROLES_OPS_WRITE), async (req, res) => {
   const {
     flightNumber,
     routeId,
@@ -614,7 +620,7 @@ router.post('/flights', requireAuth, requireRoles('admin', 'super_admin', 'opera
   }
 });
 
-router.put('/flights/:flightId', requireAuth, requireRoles('admin', 'super_admin', 'operations'), async (req, res) => {
+router.put('/flights/:flightId', requireAuth, requireRoles(...ROLES_OPS_WRITE), async (req, res) => {
   const { flightId } = req.params;
   if (!isUuid(flightId)) {
     return res.status(400).json({ message: 'Invalid flight id.' });
@@ -722,7 +728,7 @@ router.put('/flights/:flightId', requireAuth, requireRoles('admin', 'super_admin
   }
 });
 
-router.patch('/flights/:flightId/status', requireAuth, requireRoles('admin', 'super_admin', 'operations'), async (req, res) => {
+router.patch('/flights/:flightId/status', requireAuth, requireRoles(...ROLES_OPS_WRITE), async (req, res) => {
   const { flightId } = req.params;
   const { status } = req.body;
   if (!isUuid(flightId)) {
@@ -759,7 +765,7 @@ router.patch('/flights/:flightId/status', requireAuth, requireRoles('admin', 'su
   }
 });
 
-router.post('/flights/:flightId/cancel', requireAuth, requireRoles('admin', 'super_admin', 'operations'), async (req, res) => {
+router.post('/flights/:flightId/cancel', requireAuth, requireRoles(...ROLES_OPS_WRITE), async (req, res) => {
   const { flightId } = req.params;
   const { reason } = req.body;
   if (!isUuid(flightId)) {
@@ -808,7 +814,7 @@ router.post('/flights/:flightId/cancel', requireAuth, requireRoles('admin', 'sup
   }
 });
 
-router.post('/flights/:flightId/assign-aircraft', requireAuth, requireRoles('admin', 'super_admin', 'operations'), async (req, res) => {
+router.post('/flights/:flightId/assign-aircraft', requireAuth, requireRoles(...ROLES_OPS_WRITE), async (req, res) => {
   const { flightId } = req.params;
   const { aircraftId } = req.body;
 
@@ -898,7 +904,7 @@ router.post('/flights/:flightId/assign-aircraft', requireAuth, requireRoles('adm
   }
 });
 
-router.post('/flights/:flightId/assign-crew', requireAuth, requireRoles('admin', 'super_admin', 'operations'), async (req, res) => {
+router.post('/flights/:flightId/assign-crew', requireAuth, requireRoles(...ROLES_OPS_WRITE), async (req, res) => {
   const { flightId } = req.params;
   const { crewUserId, dutyRole } = req.body;
 
@@ -999,7 +1005,7 @@ router.post('/flights/:flightId/assign-crew', requireAuth, requireRoles('admin',
 router.delete(
   '/flights/:flightId/crew/:assignmentId',
   requireAuth,
-  requireRoles('admin', 'super_admin', 'operations'),
+  requireRoles(...ROLES_OPS_WRITE),
   async (req, res) => {
     const { flightId, assignmentId } = req.params;
     if (!isUuid(flightId) || !isUuid(assignmentId)) {
@@ -1027,7 +1033,7 @@ router.delete(
   }
 );
 
-router.post('/flights/:flightId/dispatch', requireAuth, requireRoles('admin', 'super_admin', 'operations'), async (req, res) => {
+router.post('/flights/:flightId/dispatch', requireAuth, requireRoles(...ROLES_OPS_WRITE), async (req, res) => {
   const { flightId } = req.params;
   if (!isUuid(flightId)) {
     return res.status(400).json({ message: 'Invalid flight id.' });
@@ -1110,7 +1116,7 @@ router.post('/flights/:flightId/dispatch', requireAuth, requireRoles('admin', 's
   }
 });
 
-router.post('/flights/:flightId/dispatch-release', requireAuth, requireRoles('admin', 'super_admin', 'operations'), async (req, res) => {
+router.post('/flights/:flightId/dispatch-release', requireAuth, requireRoles(...ROLES_OPS_WRITE), async (req, res) => {
   const { flightId } = req.params;
   const { remarks, checklist } = req.body;
   if (!isUuid(flightId)) {
@@ -1211,7 +1217,7 @@ router.post('/flights/:flightId/dispatch-release', requireAuth, requireRoles('ad
   }
 });
 
-router.post('/flights/:flightId/delays', requireAuth, requireRoles('admin', 'super_admin', 'operations'), async (req, res) => {
+router.post('/flights/:flightId/delays', requireAuth, requireRoles(...ROLES_OPS_WRITE), async (req, res) => {
   const { flightId } = req.params;
   if (!isUuid(flightId)) {
     return res.status(400).json({ message: 'Invalid flight id.' });
@@ -1332,7 +1338,7 @@ router.post('/flights/:flightId/delays', requireAuth, requireRoles('admin', 'sup
 router.get(
   '/flights/:flightId/details',
   requireAuth,
-  requireRoles('admin', 'super_admin', 'operations', 'maintenance', 'agent', 'customer_service'),
+  requireRoles(...ROLES_OPS_FLIGHT_DETAIL),
   async (req, res) => {
     const { flightId } = req.params;
     if (!isUuid(flightId)) {

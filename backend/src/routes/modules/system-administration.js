@@ -92,6 +92,9 @@ router.put('/users/:id', requireAuth, requireUserManager, async (req, res) => {
     }
 
     const target = cur.rows[0];
+    if (!isSuperAdmin(req.user.role) && target.role === 'super_admin') {
+      return res.status(403).json({ message: 'Only Super Admin may modify a Super Admin account.' });
+    }
     const nextRole = role !== undefined ? role : target.role;
     const nextActive = is_active !== undefined ? Boolean(is_active) : target.is_active;
 
@@ -131,14 +134,54 @@ router.put('/users/:id', requireAuth, requireUserManager, async (req, res) => {
         id
       ]
     );
-    await writeAudit(client, {
-      userId: req.user.userId,
-      action: 'USER_UPDATED',
-      entity: 'users',
-      entityId: id,
-      metadata: { changes: { full_name, role, is_active } },
-      req
-    });
+    const roleChanged = role !== undefined && String(role) !== String(target.role);
+    const deactivated = is_active !== undefined && target.is_active === true && nextActive === false;
+    const activated = is_active !== undefined && target.is_active === false && nextActive === true;
+
+    if (roleChanged) {
+      await writeAudit(client, {
+        userId: req.user.userId,
+        action: 'USER_ROLE_CHANGED',
+        entity: 'users',
+        entityId: id,
+        metadata: {
+          fromRole: target.role,
+          toRole: r.rows[0].role,
+          ...(full_name !== undefined ? { full_name } : {})
+        },
+        req
+      });
+    }
+    if (deactivated) {
+      await writeAudit(client, {
+        userId: req.user.userId,
+        action: 'USER_DEACTIVATED',
+        entity: 'users',
+        entityId: id,
+        metadata: { email: r.rows[0].email },
+        req
+      });
+    }
+    if (activated) {
+      await writeAudit(client, {
+        userId: req.user.userId,
+        action: 'USER_ACTIVATED',
+        entity: 'users',
+        entityId: id,
+        metadata: { email: r.rows[0].email },
+        req
+      });
+    }
+    if (!roleChanged && !deactivated && !activated) {
+      await writeAudit(client, {
+        userId: req.user.userId,
+        action: 'USER_UPDATED',
+        entity: 'users',
+        entityId: id,
+        metadata: { changes: { full_name, role, is_active } },
+        req
+      });
+    }
     res.json(r.rows[0]);
   } catch (e) {
     res.status(500).json({ message: 'Failed to update user.', error: e.message });
@@ -155,6 +198,14 @@ router.post('/users/:id/password-reset', requireAuth, requireUserManager, async 
 
   const client = await pool.connect();
   try {
+    const tgt = await client.query(`SELECT id, email, role FROM users WHERE id = $1::uuid`, [req.params.id]);
+    if (!tgt.rows[0]) {
+      return res.status(404).json({ message: 'User not found.' });
+    }
+    if (!isSuperAdmin(req.user.role) && tgt.rows[0].role === 'super_admin') {
+      return res.status(403).json({ message: 'Only Super Admin may reset a Super Admin password.' });
+    }
+
     const hash = await bcrypt.hash(String(newPassword), BCRYPT_ROUNDS);
     const r = await client.query(
       `UPDATE users SET password_hash = $1, password_reset_token = NULL, password_reset_expires_at = NULL, updated_at = NOW()

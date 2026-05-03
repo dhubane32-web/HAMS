@@ -4,6 +4,7 @@ import { FormEvent, useCallback, useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import type { UserRole } from '@/lib/roles';
 import { roleDisplayName } from '@/lib/roles';
+import { rbacBadgeClass, rbacBadgeLabel } from '@/lib/airline-rbac';
 import { getPublicApiBaseUrl } from '@/lib/api-base';
 
 const API_BASE_URL = getPublicApiBaseUrl();
@@ -14,6 +15,8 @@ const ALL_ROLES: UserRole[] = [
   'finance',
   'operations',
   'agent',
+  'booking_agent',
+  'checkin_agent',
   'crew',
   'maintenance',
   'customer_service',
@@ -313,7 +316,7 @@ export default function SystemAdministrationApp() {
                 <tr>
                   <th>Name</th>
                   <th>Email</th>
-                  <th>Role</th>
+                  <th>Role &amp; access</th>
                   <th>Active</th>
                   <th>Actions</th>
                 </tr>
@@ -324,24 +327,34 @@ export default function SystemAdministrationApp() {
                     <td>{u.full_name}</td>
                     <td>{u.email}</td>
                     <td>
-                      {!caps.isSuperAdmin && u.role === 'super_admin' ? (
-                        <span>{u.role}</span>
-                      ) : (
-                        <select
-                          value={u.role}
-                          onChange={(e) => void updateUser(u, { role: e.target.value as UserRole })}
-                        >
-                          {(caps.isSuperAdmin ? ALL_ROLES : assignableRoles).map((r) => (
-                            <option key={r} value={r}>
-                              {r}
-                            </option>
-                          ))}
-                        </select>
-                      )}
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+                        <span className={rbacBadgeClass(u.role)} title="RBAC scope">
+                          {rbacBadgeLabel(u.role)}
+                        </span>
+                        {!caps.isSuperAdmin && u.role === 'super_admin' ? (
+                          <span>{roleDisplayName(u.role)}</span>
+                        ) : (
+                          <select
+                            value={u.role}
+                            onChange={(e) => void updateUser(u, { role: e.target.value as UserRole })}
+                          >
+                            {(caps.isSuperAdmin ? ALL_ROLES : assignableRoles).map((r) => (
+                              <option key={r} value={r}>
+                                {roleDisplayName(r)}
+                              </option>
+                            ))}
+                          </select>
+                        )}
+                      </div>
                     </td>
                     <td>{u.is_active ? 'Yes' : 'No'}</td>
                     <td style={{ whiteSpace: 'nowrap' }}>
-                      <button type="button" className="secondary" onClick={() => void updateUser(u, { is_active: !u.is_active })}>
+                      <button
+                        type="button"
+                        className="secondary"
+                        disabled={!caps.isSuperAdmin && u.role === 'super_admin'}
+                        onClick={() => void updateUser(u, { is_active: !u.is_active })}
+                      >
                         {u.is_active ? 'Deactivate' : 'Activate'}
                       </button>
                     </td>
@@ -355,11 +368,13 @@ export default function SystemAdministrationApp() {
           <form className="module-form-grid" onSubmit={submitPasswordReset}>
             <select value={resetUserId} onChange={(e) => setResetUserId(e.target.value)} required>
               <option value="">Select user</option>
-              {users.map((u) => (
-                <option key={u.id} value={u.id}>
-                  {u.email}
-                </option>
-              ))}
+              {users
+                .filter((u) => caps?.isSuperAdmin || u.role !== 'super_admin')
+                .map((u) => (
+                  <option key={u.id} value={u.id}>
+                    {u.email}
+                  </option>
+                ))}
             </select>
             <input
               type="password"

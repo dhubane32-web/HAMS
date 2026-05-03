@@ -4,11 +4,13 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 import type { UserRole } from '@/lib/roles';
 import { getPublicApiBaseUrl } from '@/lib/api-base';
+import SalesCommercialWorkspace from '@/components/sales/SalesCommercialWorkspace';
 
 const API_BASE_URL = getPublicApiBaseUrl();
 
 type Tab =
   | 'dashboard'
+  | 'commercial'
   | 'leads'
   | 'corporate'
   | 'agents'
@@ -16,7 +18,7 @@ type Tab =
   | 'segments'
   | 'performance';
 
-const LEAD_STATUSES = ['NEW', 'CONTACTED', 'QUALIFIED', 'PROPOSAL', 'WON', 'LOST'] as const;
+const LEAD_STATUSES = ['NEW', 'CONTACTED', 'QUALIFIED', 'PROPOSAL', 'NEGOTIATION', 'WON', 'LOST'] as const;
 
 function getToken() {
   return typeof window !== 'undefined' ? localStorage.getItem('hams_token') : null;
@@ -496,10 +498,11 @@ export default function SalesPage() {
       <section className="module-card">
         <h1>Sales &amp; marketing</h1>
         <p style={{ margin: 0, color: '#64748b', fontSize: '0.85rem' }}>
-          Leads with pipeline status, corporate and travel-agent accounts, campaigns, promotional fares via discount
-          codes and route scopes, customer segments, and agent performance tied to real bookings. Pass{' '}
-          <code>promoCode</code> and <code>campaignId</code> on booking creation to attach conversion and apply discounts
-          (validated dates, usage limits, and route rules).
+          Hawana Airways Management System (HAMS) commercial stack: revenue management signals, multi-channel
+          distribution, corporate and agency programs, loyalty, ancillaries, automation rules, and executive KPIs — wired
+          to bookings, finance, and audit. Pass <code>promoCode</code>, <code>campaignId</code>,{' '}
+          <code>salesChannel</code>, <code>corporateAccountId</code>, and <code>travelAgentId</code> on booking creation
+          where applicable.
         </p>
       </section>
 
@@ -507,6 +510,7 @@ export default function SalesPage() {
         {(
           [
             ['dashboard', 'Marketing dashboard'],
+            ['commercial', 'Commercial suite'],
             ['leads', 'Leads & pipeline'],
             ['corporate', 'Corporate'],
             ['agents', 'Travel agents'],
@@ -522,6 +526,7 @@ export default function SalesPage() {
             onClick={() => setTab(id)}
             disabled={
               (id === 'dashboard' && !canViewMarketingDash(role)) ||
+              (id === 'commercial' && !canViewMarketingDash(role)) ||
               (id === 'corporate' && role && !['admin', 'super_admin', 'sales_manager', 'finance'].includes(role)) ||
               (id === 'agents' && role && !['admin', 'super_admin', 'sales_manager', 'operations'].includes(role)) ||
               (id === 'segments' && !canEditSalesContent(role))
@@ -531,6 +536,10 @@ export default function SalesPage() {
           </button>
         ))}
       </div>
+
+      {tab === 'commercial' && canViewMarketingDash(role) && (
+        <SalesCommercialWorkspace fetchJson={fetchJson} role={role} />
+      )}
 
       {tab === 'dashboard' && canViewMarketingDash(role) && (
         <section className="module-card">

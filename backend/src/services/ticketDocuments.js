@@ -22,6 +22,117 @@ function formatWhen(iso) {
   return Number.isNaN(d.getTime()) ? String(iso) : d.toLocaleString();
 }
 
+/** Compact date/time for e-ticket itinerary (avoids overly long strings). */
+function formatEticketDateTime(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return String(iso);
+  return d.toLocaleString('en-GB', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false
+  });
+}
+
+function formatIssueDate(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return String(iso);
+  return d.toLocaleString('en-GB', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false
+  });
+}
+
+function tripTypeLabel(tt) {
+  const u = String(tt || '').toUpperCase();
+  if (u === 'RETURN') return 'Return';
+  if (u === 'ONE_WAY') return 'One way';
+  return tt || '—';
+}
+
+/**
+ * Draw origin and destination with a small vector arrow (reliable in standard PDF fonts).
+ */
+function drawAirportRoute(doc, x, y, dep, arr, opts = {}) {
+  const size = opts.fontSize || 10;
+  const depS = String(dep || '').trim().toUpperCase();
+  const arrS = String(arr || '').trim().toUpperCase();
+  doc.save();
+  doc.fillColor('#0f172a').strokeColor('#64748b').lineWidth(0.65);
+  doc.font('Helvetica-Bold').fontSize(size);
+  doc.text(depS, x, y, { lineBreak: false });
+  const wDep = doc.widthOfString(depS);
+  const gap = 5;
+  const ax = x + wDep + gap;
+  const midY = y + size * 0.35;
+  const arrowLen = 16;
+  doc.moveTo(ax, midY).lineTo(ax + arrowLen, midY).stroke();
+  doc
+    .moveTo(ax + arrowLen - 1.5, midY - 3.2)
+    .lineTo(ax + arrowLen + 3.2, midY)
+    .lineTo(ax + arrowLen - 1.5, midY + 3.2)
+    .fillColor('#64748b')
+    .fill();
+  doc.font('Helvetica-Bold').fontSize(size).fillColor('#0f172a').text(arrS, ax + arrowLen + gap + 2, y, { lineBreak: false });
+  doc.restore();
+}
+
+function computeFareBreakdown(ctx) {
+  const { ticket, fareLines, legBaseSum, perPaxTotal } = ctx;
+  const currency = String(ticket.currency || 'USD').toUpperCase();
+  let base = 0;
+  let taxes = 0;
+  let fees = 0;
+  if (fareLines.length) {
+    for (const L of fareLines) {
+      const a = Number(L.amount);
+      if (!Number.isFinite(a)) continue;
+      const ty = String(L.type || '').toLowerCase();
+      if (ty === 'tax') taxes += a;
+      else if (ty === 'fee') fees += a;
+      else base += a;
+    }
+    if (base === 0 && taxes === 0 && fees === 0) {
+      base = fareLines.reduce((s, L) => s + (Number(L.amount) || 0), 0);
+    }
+  } else {
+    base = Number(ticket.fare_base_total) || Number(legBaseSum) || 0;
+    taxes = Number(ticket.fare_tax_total) || 0;
+    fees = Number(ticket.fare_fee_total) || 0;
+  }
+  const total = Number.isFinite(Number(perPaxTotal)) ? Number(perPaxTotal) : base + taxes + fees;
+  return { base, taxes, fees, total, currency };
+}
+
+function pdfBufferFromBuilderA4(buildFn) {
+  return new Promise((resolve, reject) => {
+    const doc = new PDFDocument({
+      size: 'A4',
+      margin: 40,
+      info: { Producer: 'HAMS', Creator: AIRLINE_NAME, Title: 'Electronic ticket' }
+    });
+    const chunks = [];
+    doc.on('data', (c) => chunks.push(c));
+    doc.on('end', () => resolve(Buffer.concat(chunks)));
+    doc.on('error', reject);
+    try {
+      buildFn(doc);
+    } catch (e) {
+      reject(e);
+      return;
+    }
+    doc.end();
+  });
+}
+
 function fareLinesFromBooking(booking) {
   let fb = booking.fare_breakdown;
   if (typeof fb === 'string') {
@@ -178,86 +289,179 @@ function pdfBufferFromBuilder(buildFn) {
   });
 }
 
+function drawSectionTitle(doc, x, y, w, title) {
+  doc.font('Helvetica-Bold').fontSize(10).fillColor(BRAND_HEX).text(title.toUpperCase(), x, y, { width: w });
+  return y + 14;
+}
+
+/** Two-column info row: label | value (single line). */
+function drawInfoRow(doc, x, y, w, label, value, opts = {}) {
+  const lh = opts.lineHeight || 13;
+  const labelW = opts.labelWidth || 118;
+  doc.font('Helvetica-Bold').fontSize(8.5).fillColor('#64748b').text(label, x, y, { width: labelW, continued: false });
+  doc.font('Helvetica').fontSize(8.5).fillColor('#0f172a').text(String(value ?? '—'), x + labelW + 6, y, {
+    width: w - labelW - 8
+  });
+  return y + lh;
+}
+
 export async function buildEticketPdfBuffer(ctx) {
   const { ticket, passenger, flights, seatByFlight, perPaxTotal, fareLines, paxCount } = ctx;
   const pnr = ticket.pnr;
   const tkt = ticket.ticket_number;
   const qrPayload = `HAMS|${pnr}|${tkt}|${ticket.booking_id}`;
-  const qrPng = await QRCode.toBuffer(qrPayload, { type: 'png', margin: 1, width: 160, errorCorrectionLevel: 'M' });
+  const qrPng = await QRCode.toBuffer(qrPayload, { type: 'png', margin: 1, width: 200, errorCorrectionLevel: 'M' });
 
   const name = `${passenger.first_name || ''} ${passenger.last_name || ''}`.trim() || 'Passenger';
+  const fare = computeFareBreakdown(ctx);
+  const globalTrip = tripTypeLabel(ticket.trip_type);
 
-  const textW = doc => Math.min(400, doc.page.width - 96);
+  return pdfBufferFromBuilderA4((doc) => {
+    const ml = doc.page.margins.left;
+    const mt = doc.page.margins.top;
+    const pr = doc.page.margins.right;
+    const mb = doc.page.margins.bottom;
+    const pw = doc.page.width - ml - pr;
+    const pageH = doc.page.height;
+    const footerTop = pageH - mb - 40;
 
-  return pdfBufferFromBuilder((doc) => {
-    drawBrandHeader(doc, 'Electronic ticket (e-ticket)');
-    doc.x = 48;
+    const qrCol = 118;
+    const gutter = 14;
+    const mainW = pw - qrCol - gutter;
 
-    doc.fontSize(12).fillColor(BRAND_HEX).text('Ticket details', { underline: true, width: textW(doc) });
-    doc.moveDown(0.3);
-    doc.fillColor('#111').fontSize(10);
-    doc.text(`PNR: ${pnr}`, { width: textW(doc) });
-    doc.text(`Ticket number: ${tkt}`, { width: textW(doc) });
-    doc.text(`Passenger: ${name}`, { width: textW(doc) });
-    doc.text(`Status: ${ticket.ticket_status || '—'}`, { width: textW(doc) });
-    doc.text(`Booking status: ${ticket.booking_status || '—'} · Payment: ${ticket.payment_status || '—'}`, { width: textW(doc) });
-    doc.moveDown();
+    let y = mt;
 
-    doc.fontSize(12).fillColor(BRAND_HEX).text('Itinerary', { underline: true, width: textW(doc) });
-    doc.moveDown(0.3);
-    doc.fillColor('#111').fontSize(10);
+    /* ----- Header band + document title ----- */
+    doc.save();
+    doc.rect(ml, y, pw, 52).fill(BRAND_HEX);
+    doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(18).text(AIRLINE_NAME, ml + 16, y + 12, { width: pw - 100 });
+    doc.font('Helvetica').fontSize(9).opacity(0.95).text(AIRLINE_TAGLINE, ml + 16, y + 34, { width: pw - 100 });
+    doc.opacity(1);
+    doc.rect(ml + pw - 72, y + 9, 56, 34).fill('#ffffff');
+    doc.rect(ml + pw - 72, y + 9, 56, 34).strokeColor('#e2e8f0').lineWidth(0.45).stroke();
+    doc.fillColor(BRAND_HEX).font('Helvetica-Bold').fontSize(15).text('HA', ml + pw - 72, y + 17, { width: 56, align: 'center' });
+    doc.restore();
+    y += 52;
+
+    doc.save();
+    doc.rect(ml, y, pw, 36).fill('#f1f5f9').strokeColor('#cbd5e1').lineWidth(0.75).stroke();
+    doc.fillColor(BRAND_HEX).font('Helvetica-Bold').fontSize(16).text('Electronic Ticket', ml + 16, y + 10);
+    doc.fillColor('#64748b').font('Helvetica').fontSize(10).text('/ E-Ticket', ml + 148, y + 13);
+    doc.restore();
+    y += 40;
+
+    const qrX = ml + mainW + gutter;
+    const qrY = mt + 56;
+    const qrSize = 102;
+    doc.image(qrPng, qrX, qrY, { width: qrSize, height: qrSize });
+    doc.font('Helvetica').fontSize(7.5).fillColor('#475569').text('Scan for PNR / ticket verification', qrX, qrY + qrSize + 5, {
+      width: qrCol,
+      align: 'center'
+    });
+    doc.font('Helvetica').fontSize(7).fillColor('#94a3b8').text(tkt, qrX, qrY + qrSize + 18, { width: qrCol, align: 'center' });
+
+    /* ----- Ticket information panel (background first, then text) ----- */
+    const panelPad = 12;
+    const infoBoxTop = y + 6;
+    const infoBoxH = 128;
+    doc.rect(ml, infoBoxTop, mainW, infoBoxH).fill('#ffffff');
+    doc.rect(ml, infoBoxTop, mainW, infoBoxH).strokeColor('#e2e8f0').lineWidth(0.65).stroke();
+
+    let py = infoBoxTop + 10;
+    py = drawSectionTitle(doc, ml + panelPad, py, mainW - panelPad * 2, 'Ticket information');
+    py = drawInfoRow(doc, ml + panelPad, py, mainW - panelPad * 2, 'PNR', pnr);
+    py = drawInfoRow(doc, ml + panelPad, py, mainW - panelPad * 2, 'Ticket number', tkt);
+    py = drawInfoRow(doc, ml + panelPad, py, mainW - panelPad * 2, 'Passenger name', name);
+    py = drawInfoRow(doc, ml + panelPad, py, mainW - panelPad * 2, 'Status', ticket.ticket_status || '—');
+    py = drawInfoRow(doc, ml + panelPad, py, mainW - panelPad * 2, 'Booking status', ticket.booking_status || '—');
+    py = drawInfoRow(doc, ml + panelPad, py, mainW - panelPad * 2, 'Payment status', ticket.payment_status || '—');
+    py = drawInfoRow(doc, ml + panelPad, py, mainW - panelPad * 2, 'Issue date', formatIssueDate(ticket.issued_at));
+
+    y = infoBoxTop + infoBoxH + 14;
+
+    /* ----- Flight itinerary ----- */
+    const itBoxTop = y;
+    const rowH = 22;
+    const legRows = Math.max(1, flights.length);
+    const itBoxH = 38 + legRows * rowH + 24;
+    doc.rect(ml, itBoxTop, mainW, itBoxH).fill('#ffffff');
+    doc.rect(ml, itBoxTop, mainW, itBoxH).strokeColor('#e2e8f0').lineWidth(0.65).stroke();
+
+    py = itBoxTop + 8;
+    py = drawSectionTitle(doc, ml + panelPad, py, mainW - panelPad * 2, 'Flight itinerary');
+    doc.font('Helvetica').fontSize(7.5).fillColor('#64748b').text(`Trip type (booking): ${globalTrip}`, ml + panelPad, py);
+    py += 12;
+
+    const col = {
+      route: ml + panelPad,
+      flt: ml + panelPad + 100,
+      dep: ml + panelPad + 152,
+      cab: ml + panelPad + 252,
+      seat: ml + panelPad + 302
+    };
+    doc.font('Helvetica-Bold').fontSize(7).fillColor('#475569');
+    doc.text('ROUTE', col.route, py, { width: 96 });
+    doc.text('FLT', col.flt, py, { width: 46 });
+    doc.text('DEPARTURE', col.dep, py, { width: 96 });
+    doc.text('CABIN', col.cab, py, { width: 42 });
+    doc.text('SEAT', col.seat, py, { width: 36 });
+    py += 12;
+    doc.moveTo(ml + panelPad, py).lineTo(ml + mainW - panelPad, py).strokeColor('#e2e8f0').lineWidth(0.5).stroke();
+    py += 6;
+
+    doc.font('Helvetica').fontSize(8).fillColor('#0f172a');
     for (const fl of flights) {
       const seat = seatByFlight[fl.id] || '—';
-      doc.text(
-        `${fl.leg_type === 'INBOUND' ? 'Inbound' : 'Outbound'} · ${fl.flight_number}  ${fl.departure_airport} → ${fl.arrival_airport}`,
-        { width: textW(doc) }
-      );
-      doc.text(`  Date: ${formatWhen(fl.departure_time)} · Seat: ${seat} · Cabin: ${fl.cabin_class || 'ECONOMY'}`, {
-        width: textW(doc)
-      });
-      doc.moveDown(0.35);
+      const cabin = String(fl.cabin_class || 'ECONOMY').toUpperCase();
+      const legLabel = fl.leg_type === 'INBOUND' ? 'Inbound' : 'Outbound';
+      drawAirportRoute(doc, col.route, py, fl.departure_airport, fl.arrival_airport, { fontSize: 8 });
+      doc.font('Helvetica-Bold').fontSize(8.5).text(String(fl.flight_number || '—'), col.flt, py + 1, { width: 52 });
+      doc.font('Helvetica').fontSize(7.5).fillColor('#334155').text(formatEticketDateTime(fl.departure_time), col.dep, py + 1, { width: 92 });
+      doc.font('Helvetica').fontSize(8).fillColor('#0f172a').text(cabin, col.cab, py + 1, { width: 44 });
+      doc.font('Helvetica-Bold').fontSize(8.5).text(String(seat), col.seat, py + 1, { width: 40 });
+      doc.font('Helvetica').fontSize(6.8).fillColor('#94a3b8').text(legLabel, col.dep, py + 12, { width: 200 });
+      py += rowH;
     }
 
-    doc.fontSize(12).fillColor(BRAND_HEX).text('Fare & taxes (per passenger)', { underline: true, width: textW(doc) });
-    doc.moveDown(0.3);
-    doc.fontSize(10).fillColor('#111');
-    if (fareLines.length) {
-      for (const L of fareLines) {
-        const tag = L.type === 'tax' ? '[tax]' : L.type === 'fee' ? '[fee]' : '';
-        doc.text(`${L.label} ${tag}: ${money(L.amount)} ${ticket.currency}`, { width: textW(doc) });
-      }
-    } else {
-      doc.text(`Leg base (sum of legs): ${money(ctx.legBaseSum)} ${ticket.currency}`, { width: textW(doc) });
-    }
-    doc.moveDown(0.2);
-    doc.font('Helvetica-Bold').text(`Total due (this passenger, ${paxCount} pax on booking): ${money(perPaxTotal)} ${ticket.currency}`, {
-      width: textW(doc)
-    });
-    doc.font('Helvetica');
-    if (ticket.fare_base_total != null) {
-      doc.text(`Recorded base (booking): ${money(ticket.fare_base_total)} ${ticket.currency}`, { width: textW(doc) });
-    }
-    if (ticket.fare_tax_total != null) {
-      doc.text(`Recorded taxes (booking): ${money(ticket.fare_tax_total)} ${ticket.currency}`, { width: textW(doc) });
-    }
-    if (ticket.fare_fee_total != null) {
-      doc.text(`Recorded fees (booking): ${money(ticket.fare_fee_total)} ${ticket.currency}`, { width: textW(doc) });
-    }
-    doc.moveDown();
-    doc.fontSize(8).fillColor('#64748b').text(`Issued: ${formatWhen(ticket.issued_at)} · Present this document or QR at check-in.`, {
-      width: textW(doc)
-    });
+    y = itBoxTop + itBoxH + 14;
 
-    const qrSize = 132;
-    const qx = (doc.page.width - qrSize) / 2;
-    const qy = Math.min(doc.y + 16, doc.page.height - qrSize - 72);
-    doc.image(qrPng, qx, qy, { width: qrSize, height: qrSize });
-    doc.y = qy + qrSize + 6;
-    doc.fontSize(7).fillColor('#64748b').text('Scan for PNR / ticket verification', { align: 'center' });
-    doc.moveDown(0.5);
-    doc.fontSize(8).fillColor('#111').font('Courier').text(tkt, { align: 'center' });
-    doc.font('Helvetica');
-    doc.fontSize(7).fillColor('#64748b').text('Ticket number (numeric)', { align: 'center' });
+    /* ----- Fare breakdown (this passenger) ----- */
+    const fareBoxTop = y;
+    const fareBoxH = 112;
+    doc.rect(ml, fareBoxTop, mainW, fareBoxH).fill('#ffffff');
+    doc.rect(ml, fareBoxTop, mainW, fareBoxH).strokeColor('#e2e8f0').lineWidth(0.65).stroke();
+    py = fareBoxTop + 10;
+    py = drawSectionTitle(doc, ml + panelPad, py, mainW - panelPad * 2, 'Fare & charges (this passenger)');
+    doc.font('Helvetica').fontSize(7.5).fillColor('#64748b').text(`${paxCount} passenger(s) on booking · amounts in ${fare.currency}`, ml + panelPad, py);
+    py += 14;
+
+    const tblLeft = ml + panelPad;
+    const tblW = mainW - panelPad * 2;
+    const amtX = tblLeft + tblW - 78;
+    const rowLine = (label, amt, bold) => {
+      doc.save();
+      if (bold) doc.font('Helvetica-Bold').fontSize(9).fillColor('#0f172a');
+      else doc.font('Helvetica').fontSize(8.5).fillColor('#334155');
+      doc.text(label, tblLeft, py, { width: tblW - 86 });
+      doc.text(`${money(amt)} ${fare.currency}`, amtX, py, { width: 72, align: 'right' });
+      doc.restore();
+      py += 14;
+    };
+    rowLine('Base fare', fare.base, false);
+    rowLine('Taxes', fare.taxes, false);
+    rowLine('Fees', fare.fees, false);
+    doc.moveTo(tblLeft, py).lineTo(tblLeft + tblW, py).strokeColor('#cbd5e1').lineWidth(0.45).stroke();
+    py += 8;
+    rowLine('Total paid (per passenger)', fare.total, true);
+
+    /* ----- Footer (fixed) ----- */
+    doc.font('Helvetica').fontSize(8).fillColor('#475569');
+    doc.text('Present this document or QR code at check-in.', ml, footerTop, { width: pw, align: 'center' });
+    doc.text('This ticket is electronically generated and valid without signature.', ml, footerTop + 12, {
+      width: pw,
+      align: 'center'
+    });
+    doc.fontSize(7).fillColor('#94a3b8').text(`${AIRLINE_NAME} · Ref: ${pnr} / ${tkt}`, ml, footerTop + 28, { width: pw, align: 'center' });
   });
 }
 

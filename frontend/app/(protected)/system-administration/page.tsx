@@ -1,33 +1,41 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
 import SystemAdministrationApp from '@/components/system-admin/SystemAdministrationApp';
-import type { UserRole } from '@/lib/roles';
+import { readSessionUser } from '@/lib/auth-session';
+import { canAccessModule } from '@/lib/airline-rbac';
 
 export default function SystemAdministrationPage() {
-  const router = useRouter();
   const [ready, setReady] = useState(false);
+  const [allowed, setAllowed] = useState(false);
 
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem('hams_user');
-      const role = raw ? ((JSON.parse(raw) as { role?: UserRole }).role ?? null) : null;
-      if (role !== 'admin' && role !== 'super_admin') {
-        router.replace('/dashboard');
-        return;
-      }
-    } catch {
-      router.replace('/login');
+    const user = readSessionUser();
+    if (!user) {
+      setAllowed(false);
+      setReady(true);
       return;
     }
+    setAllowed(canAccessModule(user.role, 'admin'));
     setReady(true);
-  }, [router]);
+  }, []);
 
   if (!ready) {
     return (
       <main className="module-page" style={{ padding: '1rem' }}>
         <p style={{ color: '#64748b' }}>Checking access…</p>
+      </main>
+    );
+  }
+
+  if (!allowed) {
+    return (
+      <main className="module-page">
+        <div className="hams-access-denied">
+          <h1>Access denied</h1>
+          <p>System Administration is restricted to Admin and Super Admin roles.</p>
+          <span className="code">RBAC · ADMIN</span>
+        </div>
       </main>
     );
   }

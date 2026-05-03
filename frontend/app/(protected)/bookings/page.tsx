@@ -124,6 +124,7 @@ export default function BookingsPage() {
   const [confirmCancelId, setConfirmCancelId] = useState<string | null>(null);
   const [payBookingId, setPayBookingId] = useState<string | null>(null);
   const [docBusy, setDocBusy] = useState<string | null>(null);
+  const [issueTicketSubmitting, setIssueTicketSubmitting] = useState(false);
 
   const fetchList = useCallback(async () => {
     setLoadError('');
@@ -208,19 +209,24 @@ export default function BookingsPage() {
   async function issueTickets(bookingId: string) {
     const token = getToken();
     if (!token) return;
-    const res = await fetch(`${API_BASE_URL}/api/booking/${bookingId}/tickets/issue`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token}` }
-    });
-    const data = (await res.json()) as { message?: string; tickets?: DetailTicket[] };
-    if (!res.ok) {
-      toast.error(data.message || 'Ticket issue failed.');
-      return;
+    setIssueTicketSubmitting(true);
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/booking/${bookingId}/tickets/issue`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = (await res.json()) as { message?: string; tickets?: DetailTicket[] };
+      if (!res.ok) {
+        toast.error(data.message || 'Ticket issue failed.');
+        return;
+      }
+      toast.success(`Issued ${data.tickets?.length ?? 0} ticket(s).`);
+      setConfirmTicketId(null);
+      if (detail?.booking.id === bookingId) void openDetail(bookingId);
+      void fetchList();
+    } finally {
+      setIssueTicketSubmitting(false);
     }
-    toast.success(`Issued ${data.tickets?.length ?? 0} ticket(s).`);
-    setConfirmTicketId(null);
-    if (detail?.booking.id === bookingId) void openDetail(bookingId);
-    void fetchList();
   }
 
   async function cancelBooking(bookingId: string) {
@@ -261,6 +267,38 @@ export default function BookingsPage() {
   }
 
   const payTarget = rows.find((r) => r.id === payBookingId);
+
+  const issueModalDetail = confirmTicketId && detail?.booking.id === confirmTicketId ? detail : null;
+  const issueModalRow = confirmTicketId ? rows.find((r) => r.id === confirmTicketId) : null;
+  const issueModalPaid = String(
+    issueModalDetail?.booking.payment_status ?? issueModalRow?.payment_status ?? ''
+  ).toUpperCase() === 'PAID';
+  const issueModalCancelled = String(
+    issueModalDetail?.booking.booking_status ?? issueModalRow?.booking_status ?? ''
+  ).toUpperCase() === 'CANCELLED';
+  const issueModalPnr = issueModalDetail?.booking.pnr ?? issueModalRow?.pnr ?? '—';
+  const issueModalPassengerNames = issueModalDetail
+    ? issueModalDetail.passengers.map((p) => `${p.first_name} ${p.last_name}`).join(', ')
+    : issueModalRow?.primary_passenger_name || '—';
+  const issueModalRoute = issueModalDetail
+    ? issueModalDetail.flights.map((f) => `${f.departure_airport}→${f.arrival_airport}`).join(' · ')
+    : issueModalRow?.route_summary || '—';
+  const issueModalTrip =
+    issueModalDetail?.booking.trip_type === 'RETURN' || issueModalRow?.trip_type === 'RETURN' ? 'Return' : 'One way';
+  const issueModalTotal =
+    issueModalDetail != null
+      ? `${issueModalDetail.booking.total_amount} ${issueModalDetail.booking.currency}`
+      : issueModalRow != null
+        ? `${issueModalRow.total_amount} ${issueModalRow.currency}`
+        : '—';
+  const issueModalPayment = String(
+    issueModalDetail?.booking.payment_status ?? issueModalRow?.payment_status ?? '—'
+  ).toUpperCase();
+  const issueDetailFullyIssued =
+    issueModalDetail != null &&
+    issueModalDetail.tickets.length > 0 &&
+    issueModalDetail.tickets.length >= issueModalDetail.passengers.length &&
+    issueModalDetail.tickets.every((t) => String(t.ticket_status || '').toUpperCase() === 'ISSUED');
 
   return (
     <main className="module-page">
@@ -343,8 +381,20 @@ export default function BookingsPage() {
                           <button
                             type="button"
                             className="secondary"
-                            disabled={!paid || cancelled}
-                            title={!paid ? 'Pay booking first' : cancelled ? 'Cancelled' : ''}
+                            disabled={
+                              cancelled ||
+                              Boolean(row.ticket_numbers_summary?.trim()) ||
+                              issueTicketSubmitting
+                            }
+                            title={
+                              cancelled
+                                ? 'Cancelled'
+                                : row.ticket_numbers_summary?.trim()
+                                  ? 'Ticket already issued'
+                                  : !paid
+                                    ? 'Open to confirm — payment required before issuance'
+                                    : ''
+                            }
                             onClick={() => setConfirmTicketId(row.id)}
                           >
                             Issue ticket
@@ -390,6 +440,22 @@ export default function BookingsPage() {
                 >
                   {docBusy === 'inv' ? 'Preparing invoice…' : 'Booking invoice (PDF)'}
                 </button>
+                {String(detail.booking.booking_status).toUpperCase() !== 'CANCELLED' &&
+                  !(detail.tickets.length >= detail.passengers.length &&
+                    detail.tickets.every((t) => String(t.ticket_status || '').toUpperCase() === 'ISSUED')) && (
+                    <button
+                      type="button"
+                      disabled={issueTicketSubmitting}
+                      onClick={() => setConfirmTicketId(detail.booking.id)}
+                    >
+                      Issue ticket
+                    </button>
+                  )}
+                {detail.tickets.length > 0 &&
+                  detail.tickets.length >= detail.passengers.length &&
+                  detail.tickets.every((t) => String(t.ticket_status || '').toUpperCase() === 'ISSUED') && (
+                    <span style={{ fontWeight: 700, color: '#047857', alignSelf: 'center' }}>Ticket Issued</span>
+                  )}
               </div>
               <div>
                 <strong>PNR:</strong> {detail.booking.pnr} | <strong>Trip:</strong>{' '}
@@ -621,14 +687,55 @@ export default function BookingsPage() {
 
       <ConfirmModal
         open={Boolean(confirmTicketId)}
-        title="Issue tickets"
-        message="Issue electronic tickets for all passengers on this booking?"
-        confirmText="Issue"
-        onCancel={() => setConfirmTicketId(null)}
-        onConfirm={() => {
-          if (confirmTicketId) void issueTickets(confirmTicketId);
+        title="Confirm Ticket Issuance"
+        message="Are you sure you want to issue this ticket? Once issued, this ticket number will be generated and the booking status will change to ISSUED."
+        confirmText="Confirm Issue Ticket"
+        confirmDisabled={
+          !issueModalPaid ||
+          issueTicketSubmitting ||
+          issueModalCancelled ||
+          issueDetailFullyIssued ||
+          (Boolean(issueModalRow?.ticket_numbers_summary?.trim()) && !issueModalDetail)
+        }
+        warning={
+          !issueModalPaid
+            ? 'Payment must be completed before ticket issuance.'
+            : issueModalCancelled
+              ? 'This booking is cancelled; tickets cannot be issued.'
+              : undefined
+        }
+        onCancel={() => {
+          if (!issueTicketSubmitting) setConfirmTicketId(null);
         }}
-      />
+        onConfirm={() => {
+          if (confirmTicketId && issueModalPaid && !issueTicketSubmitting) void issueTickets(confirmTicketId);
+        }}
+      >
+        {(issueModalDetail || issueModalRow) && (
+          <dl
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'max-content 1fr',
+              gap: '0.35rem 1rem',
+              fontSize: '0.88rem',
+              margin: 0
+            }}
+          >
+            <dt style={{ color: '#64748b' }}>PNR</dt>
+            <dd style={{ margin: 0 }}>{issueModalPnr}</dd>
+            <dt style={{ color: '#64748b' }}>Passenger name</dt>
+            <dd style={{ margin: 0 }}>{issueModalPassengerNames}</dd>
+            <dt style={{ color: '#64748b' }}>Route</dt>
+            <dd style={{ margin: 0 }}>{issueModalRoute}</dd>
+            <dt style={{ color: '#64748b' }}>Trip type</dt>
+            <dd style={{ margin: 0 }}>{issueModalTrip}</dd>
+            <dt style={{ color: '#64748b' }}>Total fare</dt>
+            <dd style={{ margin: 0 }}>{issueModalTotal}</dd>
+            <dt style={{ color: '#64748b' }}>Payment status</dt>
+            <dd style={{ margin: 0 }}>{issueModalPayment}</dd>
+          </dl>
+        )}
+      </ConfirmModal>
 
       <ConfirmModal
         open={Boolean(confirmCancelId)}

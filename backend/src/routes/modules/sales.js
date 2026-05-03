@@ -2,6 +2,7 @@ import express from 'express';
 import { pool } from '../../config/db.js';
 import { requireAuth, requireRoles } from '../../middleware/auth.js';
 import { validateAndLockPromo, PromoValidationError } from '../../services/salesPromo.js';
+import { registerSalesCommercialRoutes } from './salesCommercialExtras.js';
 
 const router = express.Router();
 
@@ -12,7 +13,7 @@ function isUuid(value) {
   return typeof value === 'string' && UUID_RE.test(value);
 }
 
-const LEAD_STATUSES = ['NEW', 'CONTACTED', 'QUALIFIED', 'PROPOSAL', 'WON', 'LOST'];
+const LEAD_STATUSES = ['NEW', 'CONTACTED', 'QUALIFIED', 'PROPOSAL', 'NEGOTIATION', 'WON', 'LOST'];
 
 router.get('/health', (_req, res) => {
   res.json({ module: 'sales', status: 'ready' });
@@ -47,12 +48,13 @@ router.get(
              CASE status
                WHEN 'NEW' THEN 1
                WHEN 'CONTACTED' THEN 2
-               WHEN 'QUALIFIED' THEN 3
-               WHEN 'PROPOSAL' THEN 4
-               WHEN 'WON' THEN 5
-               WHEN 'LOST' THEN 6
-               ELSE 9
-             END`
+             WHEN 'QUALIFIED' THEN 3
+             WHEN 'PROPOSAL' THEN 4
+             WHEN 'NEGOTIATION' THEN 5
+             WHEN 'WON' THEN 6
+             WHEN 'LOST' THEN 7
+             ELSE 9
+           END`
         ),
         pool.query(
           `SELECT id, code, used_count, usage_limit, valid_from, valid_until, active
@@ -96,8 +98,9 @@ router.get(
              WHEN 'CONTACTED' THEN 2
              WHEN 'QUALIFIED' THEN 3
              WHEN 'PROPOSAL' THEN 4
-             WHEN 'WON' THEN 5
-             WHEN 'LOST' THEN 6
+             WHEN 'NEGOTIATION' THEN 5
+             WHEN 'WON' THEN 6
+             WHEN 'LOST' THEN 7
              ELSE 9
            END`
       );
@@ -696,5 +699,7 @@ router.post(
     }
   }
 );
+
+registerSalesCommercialRoutes(router);
 
 export default router;

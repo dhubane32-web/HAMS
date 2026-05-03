@@ -36,6 +36,13 @@ const FLIGHT_OPS: ErpModuleTile = {
   href: '/operations'
 };
 
+const MAINTENANCE: ErpModuleTile = {
+  id: 'maintenance',
+  title: 'Maintenance & Aircraft',
+  description: 'Defects, inspections, release to service, and technical history.',
+  href: '/maintenance'
+};
+
 const CREW: ErpModuleTile = {
   id: 'crew',
   title: 'Crew Management',
@@ -90,6 +97,7 @@ const MAIN_MODULES: ErpModuleTile[] = [
   BOOKING_TICKETING,
   CHECKIN,
   FLIGHT_OPS,
+  MAINTENANCE,
   CREW,
   FINANCE,
   SALES,
@@ -106,57 +114,31 @@ export function erpModuleTilesForRole(role: UserRole): ErpModuleTile[] {
     case 'super_admin':
     case 'admin':
       return MAIN_MODULES;
+    case 'booking_agent':
+      return [has('dashboard'), has('booking-ticketing')];
+    case 'checkin_agent':
+      return [has('dashboard'), has('checkin')];
     case 'finance':
-      return [
-        has('dashboard'),
-        has('booking-ticketing'),
-        has('finance'),
-        has('reports'),
-        has('settings-master')
-      ];
+      return [has('dashboard'), has('finance'), has('reports')];
     case 'operations':
-      return [
-        has('dashboard'),
-        has('booking-ticketing'),
-        has('checkin'),
-        has('flight-ops'),
-        has('crew'),
-        has('customer-service'),
-        has('reports')
-      ];
+      return [has('dashboard'), has('flight-ops'), has('reports')];
+    case 'crew':
+      return [has('dashboard'), has('crew')];
+    case 'maintenance':
+      return [has('dashboard'), has('maintenance')];
+    case 'sales_manager':
+      return [has('dashboard'), has('sales'), has('reports')];
+    case 'customer_service':
+      return [has('dashboard'), has('customer-service')];
     case 'agent':
       return [
         has('dashboard'),
         has('booking-ticketing'),
         has('checkin'),
-        has('finance'),
-        has('sales'),
         has('customer-service'),
-        has('reports')
+        has('sales')
       ];
-    case 'customer_service':
-      return [
-        has('dashboard'),
-        has('booking-ticketing'),
-        has('checkin'),
-        has('customer-service'),
-        has('reports')
-      ];
-    case 'sales_manager':
-      return [
-        has('dashboard'),
-        has('booking-ticketing'),
-        has('checkin'),
-        has('sales'),
-        has('customer-service'),
-        has('finance'),
-        has('reports')
-      ];
-    case 'crew':
-      return [has('dashboard'), has('reports')];
-    case 'maintenance':
-      return [has('dashboard'), has('flight-ops'), has('reports')];
     default:
-      return [];
+      return [has('dashboard')];
   }
 }

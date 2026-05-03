@@ -903,3 +903,86 @@ a { color: inherit; text-decoration: none; }
   .neo-login-shell { grid-template-columns: 1fr; min-height: auto; }
   .neo-login-left { min-height: 330px; }
 }
+
+/* Airline RBAC — user table badges + access denied */
+.hams-rbac-badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 0.2rem 0.45rem;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+.hams-rbac-badge--critical {
+  background: linear-gradient(135deg, #450a0a, #7f1d1d);
+  color: #fecaca;
+  border-color: #991b1b;
+}
+.hams-rbac-badge--admin {
+  background: #1e3a5f;
+  color: #e0f2fe;
+  border-color: #0c4a6e;
+}
+.hams-rbac-badge--desk {
+  background: #ecfdf5;
+  color: #065f46;
+  border-color: #6ee7b7;
+}
+.hams-rbac-badge--finance {
+  background: #fffbeb;
+  color: #92400e;
+  border-color: #fcd34d;
+}
+.hams-rbac-badge--ops {
+  background: #eff6ff;
+  color: #1e40af;
+  border-color: #93c5fd;
+}
+.hams-rbac-badge--tech {
+  background: #f5f3ff;
+  color: #5b21b6;
+  border-color: #c4b5fd;
+}
+.hams-rbac-badge--commercial {
+  background: #fdf4ff;
+  color: #86198f;
+  border-color: #e879f9;
+}
+.hams-rbac-badge--legacy {
+  background: #f1f5f9;
+  color: #475569;
+  border-color: #cbd5e1;
+}
+
+.hams-access-denied {
+  max-width: 520px;
+  margin: 2rem auto;
+  padding: 1.75rem;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 16px;
+  box-shadow: 0 16px 40px rgba(15, 23, 42, 0.08);
+  text-align: center;
+}
+.hams-access-denied h1 {
+  margin: 0 0 0.5rem;
+  font-size: 1.25rem;
+  color: #0f172a;
+}
+.hams-access-denied p {
+  margin: 0;
+  color: #64748b;
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+.hams-access-denied .code {
+  display: inline-block;
+  margin-top: 1rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  color: #94a3b8;
+}

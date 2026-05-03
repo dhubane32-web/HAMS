@@ -11,6 +11,7 @@ import {
 import { buildBoardingPassPdfBuffer, buildBagTagPdfBuffer, loadBagTagPdfContext } from '../../services/checkinDocuments.js';
 import { assertGateMatchesFlight, runBoardingScan } from '../../services/checkinBoardingWorkflow.js';
 import { isFlightOpenForPassengerCheckin } from '../../lib/flightOccStatus.js';
+import { ROLES_CHECKIN_DESK, ROLES_CHECKIN_OPS } from '../../lib/airlineRbac.js';
 
 const router = express.Router();
 
@@ -32,7 +33,7 @@ router.get('/health', (_req, res) => {
 router.get(
   '/lookup',
   requireAuth,
-  requireRoles('admin', 'agent', 'operations', 'customer_service', 'sales_manager'),
+  requireRoles(...ROLES_CHECKIN_DESK),
   async (req, res) => {
     const pnr = String(req.query.pnr || '').trim().toUpperCase();
     const lastName = String(req.query.lastName || req.query.last_name || '').trim();
@@ -79,7 +80,7 @@ router.get(
 router.get(
   '/documents/boarding-pass-pdf',
   requireAuth,
-  requireRoles('admin', 'agent', 'operations', 'customer_service', 'sales_manager'),
+  requireRoles(...ROLES_CHECKIN_DESK),
   async (req, res) => {
     const ref = String(req.query.ref || '').trim();
     if (!ref) {
@@ -124,7 +125,7 @@ router.get(
 router.get(
   '/documents/baggage-tag-pdf',
   requireAuth,
-  requireRoles('admin', 'agent', 'operations', 'customer_service', 'sales_manager'),
+  requireRoles(...ROLES_CHECKIN_DESK),
   async (req, res) => {
     const baggageId = String(req.query.baggageId || '').trim();
     if (!isUuid(baggageId)) {
@@ -150,7 +151,7 @@ router.get(
  * GET /api/checkin/search?q=&type=
  * type: pnr | ticket | name | auto (default auto: try PNR, then ticket, then name)
  */
-router.get('/search', requireAuth, requireRoles('admin', 'agent', 'operations', 'customer_service', 'sales_manager'), async (req, res) => {
+router.get('/search', requireAuth, requireRoles(...ROLES_CHECKIN_DESK), async (req, res) => {
   const q = String(req.query.q || '').trim();
   const type = String(req.query.type || 'auto').toLowerCase();
   if (!q) {
@@ -401,7 +402,7 @@ function verifyPassengerIdentity(
 router.get(
   '/flights/:flightId/seats',
   requireAuth,
-  requireRoles('admin', 'agent', 'operations', 'customer_service', 'sales_manager'),
+  requireRoles(...ROLES_CHECKIN_DESK),
   async (req, res) => {
     const { flightId } = req.params;
     if (!isUuid(flightId)) {
@@ -422,7 +423,7 @@ router.get(
 router.get(
   '/flights/:flightId/manifest',
   requireAuth,
-  requireRoles('admin', 'agent', 'operations', 'customer_service', 'sales_manager'),
+  requireRoles(...ROLES_CHECKIN_DESK),
   async (req, res) => {
     const { flightId } = req.params;
     if (!isUuid(flightId)) {
@@ -540,7 +541,7 @@ router.get(
 router.get(
   '/flights/:flightId/reconciliation',
   requireAuth,
-  requireRoles('admin', 'agent', 'operations', 'customer_service', 'sales_manager'),
+  requireRoles(...ROLES_CHECKIN_DESK),
   async (req, res) => {
     const { flightId } = req.params;
     if (!isUuid(flightId)) {
@@ -643,7 +644,7 @@ router.get(
 router.patch(
   '/flights/:flightId/gate-boarding',
   requireAuth,
-  requireRoles('admin', 'agent', 'operations', 'customer_service', 'sales_manager'),
+  requireRoles(...ROLES_CHECKIN_DESK),
   async (req, res) => {
     const { flightId } = req.params;
     if (!isUuid(flightId)) {
@@ -687,7 +688,7 @@ router.patch(
 router.post(
   '/flights/:flightId/close-check-in',
   requireAuth,
-  requireRoles('admin', 'agent', 'operations'),
+  requireRoles(...ROLES_CHECKIN_OPS),
   async (req, res) => {
     const { flightId } = req.params;
     if (!isUuid(flightId)) {
@@ -726,7 +727,7 @@ router.post(
 router.post(
   '/flights/:flightId/reopen-check-in',
   requireAuth,
-  requireRoles('admin', 'agent', 'operations'),
+  requireRoles(...ROLES_CHECKIN_OPS),
   async (req, res) => {
     const { flightId } = req.params;
     if (!isUuid(flightId)) {
@@ -762,7 +763,7 @@ router.post(
 router.get(
   '/ticket/:ticketNumber',
   requireAuth,
-  requireRoles('admin', 'agent', 'operations', 'customer_service', 'sales_manager'),
+  requireRoles(...ROLES_CHECKIN_DESK),
   async (req, res) => {
     const ticketNumber = decodeURIComponent(String(req.params.ticketNumber || '').trim());
     if (!ticketNumber) {
@@ -792,7 +793,7 @@ router.get(
   }
 );
 
-router.get('/pnr/:pnr', requireAuth, requireRoles('admin', 'agent', 'operations', 'customer_service', 'sales_manager'), async (req, res) => {
+router.get('/pnr/:pnr', requireAuth, requireRoles(...ROLES_CHECKIN_DESK), async (req, res) => {
   const pnr = String(req.params.pnr || '').trim().toUpperCase();
 
   try {
@@ -819,7 +820,7 @@ router.get('/pnr/:pnr', requireAuth, requireRoles('admin', 'agent', 'operations'
 router.patch(
   '/checkins/:checkinId/boarding',
   requireAuth,
-  requireRoles('admin', 'agent', 'operations', 'customer_service', 'sales_manager'),
+  requireRoles(...ROLES_CHECKIN_DESK),
   async (req, res) => {
     const { checkinId } = req.params;
     if (!isUuid(checkinId)) {
@@ -928,7 +929,7 @@ router.patch(
 router.get(
   '/boarding-pass/:ref',
   requireAuth,
-  requireRoles('admin', 'agent', 'operations', 'customer_service', 'sales_manager'),
+  requireRoles(...ROLES_CHECKIN_DESK),
   async (req, res) => {
     const ref = String(req.params.ref || '').trim();
     if (!ref) {
@@ -962,7 +963,7 @@ router.get(
 router.patch(
   '/checkins/:checkinId/seat',
   requireAuth,
-  requireRoles('admin', 'agent', 'operations', 'customer_service', 'sales_manager'),
+  requireRoles(...ROLES_CHECKIN_DESK),
   async (req, res) => {
     const { checkinId } = req.params;
     if (!isUuid(checkinId)) {
@@ -1050,7 +1051,7 @@ router.patch(
 router.post(
   '/checkins/:checkinId/baggage',
   requireAuth,
-  requireRoles('admin', 'agent', 'operations', 'customer_service', 'sales_manager'),
+  requireRoles(...ROLES_CHECKIN_DESK),
   async (req, res) => {
     const { checkinId } = req.params;
     if (!isUuid(checkinId)) {
@@ -1170,7 +1171,7 @@ router.post(
 router.post(
   '/boarding/scan',
   requireAuth,
-  requireRoles('admin', 'agent', 'operations', 'customer_service', 'sales_manager'),
+  requireRoles(...ROLES_CHECKIN_DESK),
   async (req, res) => {
     const client = await pool.connect();
     try {
@@ -1491,11 +1492,11 @@ async function processCheckIn(req, res) {
   }
 }
 
-router.post('/', requireAuth, requireRoles('admin', 'agent', 'operations', 'customer_service', 'sales_manager'), processCheckIn);
+router.post('/', requireAuth, requireRoles(...ROLES_CHECKIN_DESK), processCheckIn);
 router.post(
   '/process',
   requireAuth,
-  requireRoles('admin', 'agent', 'operations', 'customer_service', 'sales_manager'),
+  requireRoles(...ROLES_CHECKIN_DESK),
   processCheckIn
 );
 

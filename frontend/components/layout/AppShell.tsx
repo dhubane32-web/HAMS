@@ -18,6 +18,8 @@ import {
 import { navForRole, isNavActive } from '@/lib/nav-config';
 import { roleDisplayName } from '@/lib/roles';
 import { clearClientSession, readSessionUser, type SessionUser } from '@/lib/auth-session';
+import { canAccessModule } from '@/lib/airline-rbac';
+import ModuleAccessGate from '@/components/layout/ModuleAccessGate';
 
 type Props = { children: React.ReactNode };
 
@@ -36,6 +38,8 @@ export default function AppShell({ children }: Props) {
   }, [pathname]);
 
   const nav = useMemo(() => navForRole(user?.role ?? null), [user?.role]);
+  const canCs = user?.role ? canAccessModule(user.role, 'customers') : false;
+  const canNotify = user?.role ? canAccessModule(user.role, 'notifications') : true;
 
   const pageName = useMemo(() => {
     const item = nav.find((n) => isNavActive(pathname, n.href));
@@ -147,12 +151,16 @@ export default function AppShell({ children }: Props) {
             <input placeholder="Search flights, bookings, passengers…" aria-label="Global search" />
           </div>
           <div className="hams-topbar-actions">
-            <Link href="/notifications" className="icon-btn badge-btn hams-icon-link" aria-label="Notifications">
-              <Bell size={16} />
-            </Link>
-            <Link href="/customer-service" className="icon-btn badge-btn hams-icon-link" aria-label="Customer service workspace">
-              <Mail size={16} />
-            </Link>
+            {canNotify && (
+              <Link href="/notifications" className="icon-btn badge-btn hams-icon-link" aria-label="Notifications">
+                <Bell size={16} />
+              </Link>
+            )}
+            {canCs && (
+              <Link href="/customers" className="icon-btn badge-btn hams-icon-link" aria-label="Customer service workspace">
+                <Mail size={16} />
+              </Link>
+            )}
             <button type="button" className="icon-btn" onClick={toggleFullscreen} aria-label="Fullscreen">
               <Maximize2 size={15} />
             </button>
@@ -175,7 +183,7 @@ export default function AppShell({ children }: Props) {
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.25 }}
         >
-          {children}
+          <ModuleAccessGate>{children}</ModuleAccessGate>
         </motion.section>
       </main>
     </div>

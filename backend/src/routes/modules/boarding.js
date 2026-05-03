@@ -4,10 +4,11 @@ import { requireAuth, requireRoles } from '../../middleware/auth.js';
 import { buildBoardingPassView } from '../../services/checkinBoardingService.js';
 import { isUuid, assertGateMatchesFlight, runBoardingScan } from '../../services/checkinBoardingWorkflow.js';
 import { isFlightOpenForBoardingOps } from '../../lib/flightOccStatus.js';
+import { ROLES_BOARDING } from '../../lib/airlineRbac.js';
 
 const router = express.Router();
 
-const ROLES = ['admin', 'agent', 'operations', 'customer_service', 'sales_manager'];
+const ROLES = ROLES_BOARDING;
 
 /**
  * POST /api/boarding/scan
