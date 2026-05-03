@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Fire and Rain</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <main class="app">
+      <header class="top">
+        <h1>Fire and Rain: Gunstorm World</h1>
+        <p>Your own survival shooter world. Build score, unlock power, clear waves.</p>
+      </header>
+
+      <section class="hud">
+        <div class="stat">
+          <span>Score</span>
+          <strong id="score">0</strong>
+        </div>
+        <div class="stat">
+          <span>Health</span>
+          <strong id="health">100</strong>
+        </div>
+        <div class="stat">
+          <span>Level</span>
+          <strong id="level">1</strong>
+        </div>
+      </section>
+
+      <section class="controls">
+        <button id="startBtn">Start Game</button>
+        <button id="addFireBtn">Spawn Enemies</button>
+        <button id="addRainBtn">Spawn Supply</button>
+      </section>
+
+      <section class="arena-wrap">
+        <canvas id="arena" width="960" height="540" aria-label="Fire and Rain game arena"></canvas>
+      </section>
+
+      <footer class="tips">
+        <p>
+          Move with <kbd>WASD</kbd>. Aim with mouse. Shoot with <kbd>Left Click</kbd>. Dash with
+          <kbd>Space</kbd>. Survive as long as possible.
+        </p>
+      </footer>
+    </main>
+
+    <script src="./game.js"></script>
+  </body>
+</html>

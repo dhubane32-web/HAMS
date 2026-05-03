@@ -1,0 +1,116 @@
+:root {
+  --bg: #0f172a;
+  --panel: #111827;
+  --text: #e5e7eb;
+  --muted: #94a3b8;
+  --fire: #ff6b35;
+  --rain: #3b82f6;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: radial-gradient(circle at top, #1e293b 0%, #0b1020 55%, #05070f 100%);
+  color: var(--text);
+  font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+}
+
+.app {
+  width: min(1100px, 94vw);
+  margin: 1rem auto 2rem;
+  display: grid;
+  gap: 0.9rem;
+}
+
+.top h1 {
+  margin: 0;
+  font-size: clamp(1.6rem, 3vw, 2.4rem);
+}
+
+.top p {
+  margin: 0.2rem 0 0;
+  color: var(--muted);
+}
+
+.hud {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(120px, 1fr));
+  gap: 0.6rem;
+}
+
+.stat {
+  background: color-mix(in srgb, var(--panel) 85%, #ffffff);
+  border: 1px solid #1f2937;
+  border-radius: 12px;
+  padding: 0.7rem 0.8rem;
+}
+
+.stat span {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.stat strong {
+  display: block;
+  margin-top: 0.18rem;
+  font-size: 1.25rem;
+}
+
+.controls {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+button {
+  border: none;
+  border-radius: 10px;
+  padding: 0.58rem 0.9rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+#startBtn {
+  background: #22c55e;
+  color: #052e16;
+}
+
+#addFireBtn {
+  background: var(--fire);
+  color: #3f1004;
+}
+
+#addRainBtn {
+  background: var(--rain);
+  color: #eff6ff;
+}
+
+.arena-wrap {
+  border-radius: 14px;
+  overflow: hidden;
+  border: 1px solid #1f2937;
+}
+
+canvas {
+  width: 100%;
+  height: auto;
+  display: block;
+  background: linear-gradient(180deg, #0a0f1f, #060912);
+}
+
+.tips {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+kbd {
+  border: 1px solid #334155;
+  border-bottom-width: 2px;
+  border-radius: 6px;
+  padding: 0.1rem 0.35rem;
+  color: var(--text);
+}
