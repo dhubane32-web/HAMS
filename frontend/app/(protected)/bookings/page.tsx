@@ -6,6 +6,13 @@ import toast from 'react-hot-toast';
 import ConfirmModal from '@/components/ui/ConfirmModal';
 import { SkeletonBlock } from '@/components/ui/StateBlocks';
 import { getPublicApiBaseUrl } from '@/lib/api-base';
+import {
+  downloadBookingInvoicePdf,
+  downloadPaymentReceiptPdf,
+  downloadTicketPdf,
+  emailTicketPdf,
+  printTicketPdf
+} from '@/lib/booking-documents';
 
 const API_BASE_URL = getPublicApiBaseUrl();
 
@@ -116,6 +123,7 @@ export default function BookingsPage() {
   const [confirmTicketId, setConfirmTicketId] = useState<string | null>(null);
   const [confirmCancelId, setConfirmCancelId] = useState<string | null>(null);
   const [payBookingId, setPayBookingId] = useState<string | null>(null);
+  const [docBusy, setDocBusy] = useState<string | null>(null);
 
   const fetchList = useCallback(async () => {
     setLoadError('');
@@ -368,6 +376,21 @@ export default function BookingsPage() {
           {detailLoading && <SkeletonBlock rows={3} />}
           {detail && !detailLoading && (
             <div style={{ display: 'grid', gap: '1rem' }}>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                <button
+                  type="button"
+                  className="secondary"
+                  disabled={Boolean(docBusy)}
+                  onClick={() => {
+                    setDocBusy('inv');
+                    void downloadBookingInvoicePdf(detail.booking.id, detail.booking.pnr)
+                      .catch((e: Error) => toast.error(e.message))
+                      .finally(() => setDocBusy(null));
+                  }}
+                >
+                  {docBusy === 'inv' ? 'Preparing invoice…' : 'Booking invoice (PDF)'}
+                </button>
+              </div>
               <div>
                 <strong>PNR:</strong> {detail.booking.pnr} | <strong>Trip:</strong>{' '}
                 {detail.booking.trip_type === 'RETURN' ? 'Return' : 'One way'}
@@ -451,20 +474,79 @@ export default function BookingsPage() {
                     <thead>
                       <tr>
                         <th>Ticket #</th>
-                        <th>Passenger id</th>
+                        <th>Passenger</th>
                         <th>Status</th>
                         <th>Issued</th>
+                        <th>Documents</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {detail.tickets.map((t) => (
-                        <tr key={t.id}>
-                          <td>{t.ticket_number}</td>
-                          <td style={{ fontSize: '0.8rem' }}>{t.passenger_id}</td>
-                          <td>{t.ticket_status}</td>
-                          <td>{new Date(t.issued_at).toLocaleString()}</td>
-                        </tr>
-                      ))}
+                      {detail.tickets.map((t) => {
+                        const pax = detail.passengers.find((p) => p.id === t.passenger_id);
+                        const paxName = pax ? `${pax.first_name} ${pax.last_name}` : t.passenger_id.slice(0, 8) + '…';
+                        const bkey = (k: string) => `${k}:${t.id}`;
+                        return (
+                          <tr key={t.id}>
+                            <td>{t.ticket_number}</td>
+                            <td style={{ fontSize: '0.85rem' }}>{paxName}</td>
+                            <td>{t.ticket_status}</td>
+                            <td>{new Date(t.issued_at).toLocaleString()}</td>
+                            <td style={{ fontSize: '0.78rem' }}>
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                <button
+                                  type="button"
+                                  className="secondary"
+                                  disabled={Boolean(docBusy)}
+                                  style={{ fontSize: '0.75rem', padding: '0.25rem 0.4rem' }}
+                                  onClick={() => {
+                                    setDocBusy(bkey('pr'));
+                                    void printTicketPdf(detail.booking.id, t.id)
+                                      .catch((e: Error) => toast.error(e.message))
+                                      .finally(() => setDocBusy(null));
+                                  }}
+                                >
+                                  {docBusy === bkey('pr') ? '…' : 'Print'}
+                                </button>
+                                <button
+                                  type="button"
+                                  className="secondary"
+                                  disabled={Boolean(docBusy)}
+                                  style={{ fontSize: '0.75rem', padding: '0.25rem 0.4rem' }}
+                                  onClick={() => {
+                                    setDocBusy(bkey('dl'));
+                                    void downloadTicketPdf(detail.booking.id, t.id, t.ticket_number)
+                                      .catch((e: Error) => toast.error(e.message))
+                                      .finally(() => setDocBusy(null));
+                                  }}
+                                >
+                                  {docBusy === bkey('dl') ? '…' : 'PDF'}
+                                </button>
+                                <button
+                                  type="button"
+                                  className="secondary"
+                                  disabled={Boolean(docBusy)}
+                                  style={{ fontSize: '0.75rem', padding: '0.25rem 0.4rem' }}
+                                  onClick={() => {
+                                    setDocBusy(bkey('em'));
+                                    void emailTicketPdf(detail.booking.id, t.id)
+                                      .then(() => toast.success('E-ticket sent.'))
+                                      .catch((e: Error & { code?: string }) =>
+                                        toast.error(
+                                          e.code === 'SMTP_NOT_CONFIGURED'
+                                            ? 'Configure SMTP on the server to email tickets.'
+                                            : e.message || 'Email failed'
+                                        )
+                                      )
+                                      .finally(() => setDocBusy(null));
+                                  }}
+                                >
+                                  {docBusy === bkey('em') ? '…' : 'Email / resend'}
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 )}
@@ -482,6 +564,7 @@ export default function BookingsPage() {
                         <th>Status</th>
                         <th>Ref</th>
                         <th>At</th>
+                        <th>Receipt</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -494,6 +577,22 @@ export default function BookingsPage() {
                           <td>{p.payment_status}</td>
                           <td style={{ fontSize: '0.8rem' }}>{p.transaction_ref || '—'}</td>
                           <td>{new Date(p.processed_at).toLocaleString()}</td>
+                          <td>
+                            <button
+                              type="button"
+                              className="secondary"
+                              disabled={Boolean(docBusy)}
+                              style={{ fontSize: '0.75rem', padding: '0.25rem 0.4rem' }}
+                              onClick={() => {
+                                setDocBusy(`rc:${p.id}`);
+                                void downloadPaymentReceiptPdf(detail.booking.id, p.id, detail.booking.pnr)
+                                  .catch((e: Error) => toast.error(e.message))
+                                  .finally(() => setDocBusy(null));
+                              }}
+                            >
+                              {docBusy === `rc:${p.id}` ? '…' : 'PDF'}
+                            </button>
+                          </td>
                         </tr>
                       ))}
                     </tbody>
