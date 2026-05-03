@@ -4,6 +4,11 @@ import { useCallback, useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import type { UserRole } from '@/lib/roles';
 import { getPublicApiBaseUrl } from '@/lib/api-base';
+import {
+  formatLoadFactorPercent,
+  formatPercent1Decimal,
+  formatSalesCurrency
+} from '@/lib/sales-format';
 
 type FetchJson = <T,>(path: string, init?: RequestInit) => Promise<T>;
 
@@ -148,12 +153,74 @@ export default function SalesCommercialWorkspace({
 
       {sub === 'kpi' && kpi && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: '0.65rem' }}>
-          <KpiCard label="Today revenue" value={String((kpi.today as { revenue?: number })?.revenue ?? 0)} />
-          <KpiCard label="Week revenue" value={String((kpi.week as { revenue?: number })?.revenue ?? 0)} />
-          <KpiCard label="Month revenue" value={String((kpi.month as { revenue?: number })?.revenue ?? 0)} />
-          <KpiCard label="Avg fare (30d)" value={String(kpi.averageFare ?? 0)} />
-          <KpiCard label="Load factor (est.)" value={`${(Number(kpi.loadFactor || 0) * 100).toFixed(1)}%`} />
+          <KpiCard
+            label="Today revenue"
+            value={formatSalesCurrency((kpi.today as { revenue?: number })?.revenue ?? 0)}
+          />
+          <KpiCard
+            label="Week revenue"
+            value={formatSalesCurrency((kpi.week as { revenue?: number })?.revenue ?? 0)}
+          />
+          <KpiCard
+            label="Month revenue"
+            value={formatSalesCurrency((kpi.month as { revenue?: number })?.revenue ?? 0)}
+          />
+          <KpiCard label="Avg fare (30d)" value={formatSalesCurrency(kpi.averageFare ?? 0)} />
+          <KpiCard label="Network load factor (MTD)" value={formatLoadFactorPercent(kpi.loadFactor)} />
           <KpiCard label="Top route" value={String((kpi.topRoute as { route?: string })?.route || '—')} />
+        </div>
+      )}
+
+      {sub === 'kpi' && kpi && (kpi.loadFactorScope as Record<string, unknown> | undefined) && (
+        <div style={{ marginTop: '0.65rem', fontSize: '0.82rem', color: '#475569' }}>
+          <p style={{ margin: '0 0 0.35rem' }}>
+            <strong>Load factor audit (scheduled departures)</strong> —{' '}
+            {String((kpi.loadFactorScope as { departureFrom?: string }).departureFrom || '').slice(0, 10)} to{' '}
+            {String((kpi.loadFactorScope as { departureBeforeExclusive?: string }).departureBeforeExclusive || '').slice(0, 10)}{' '}
+            (exclusive end):{' '}
+            <strong>{Number((kpi.loadFactorScope as { totalSeatsSold?: number }).totalSeatsSold || 0).toLocaleString('en-US')}</strong>{' '}
+            seats sold /{' '}
+            <strong>
+              {Number((kpi.loadFactorScope as { totalSeatsAvailable?: number }).totalSeatsAvailable || 0).toLocaleString(
+                'en-US'
+              )}
+            </strong>{' '}
+            seats available on{' '}
+            <strong>{Number((kpi.loadFactorScope as { flightLegCount?: number }).flightLegCount || 0)}</strong> legs (aircraft
+            assigned, INF excluded). Network LF = sold ÷ available (not an average of leg ratios).
+          </p>
+          {(Array.isArray(kpi.perFlightLoadFactor) ? kpi.perFlightLoadFactor : []).length > 0 ? (
+            <div style={{ overflow: 'auto', maxHeight: 260 }}>
+              <table className="module-table" style={{ fontSize: '0.76rem' }}>
+                <thead>
+                  <tr>
+                    <th>Flight</th>
+                    <th>Route</th>
+                    <th>Departs</th>
+                    <th>Sold</th>
+                    <th>Capacity</th>
+                    <th>LF</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(kpi.perFlightLoadFactor as Array<Record<string, unknown>>).map((row) => (
+                    <tr key={String(row.flightId)}>
+                      <td>{String(row.flightNumber)}</td>
+                      <td>
+                        {String(row.origin)}→{String(row.dest)}
+                      </td>
+                      <td style={{ whiteSpace: 'nowrap' }}>{String(row.departureTime).slice(0, 16)}</td>
+                      <td>{String(row.seatsSold)}</td>
+                      <td>{String(row.seatsAvailable)}</td>
+                      <td>{formatLoadFactorPercent(row.loadFactor)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <p style={{ margin: 0, color: '#94a3b8' }}>No qualifying flight legs in this departure window.</p>
+          )}
         </div>
       )}
 
@@ -178,6 +245,53 @@ export default function SalesCommercialWorkspace({
               Recalculate load-factor buckets
             </button>
           </p>
+          {rm.loadFactor &&
+            typeof rm.loadFactor === 'object' &&
+            (rm.loadFactor as { perFlightLoadFactor?: unknown }).perFlightLoadFactor != null && (
+              <div style={{ marginBottom: '0.75rem' }}>
+                <h4 style={{ margin: '0 0 0.35rem', fontSize: '0.9rem' }}>
+                  Load factor ({String((rm.loadFactor as { departureFrom?: string }).departureFrom || '').slice(0, 10)} →{' '}
+                  {String((rm.loadFactor as { departureBeforeExclusive?: string }).departureBeforeExclusive || '').slice(0, 10)})
+                </h4>
+                <p style={{ margin: '0 0 0.4rem', fontSize: '0.8rem', color: '#64748b' }}>
+                  Network: {formatLoadFactorPercent((rm.loadFactor as { networkLoadFactor?: number }).networkLoadFactor)} —{' '}
+                  {(rm.loadFactor as { totalSeatsSold?: number }).totalSeatsSold?.toLocaleString('en-US')} sold /{' '}
+                  {(rm.loadFactor as { totalSeatsAvailable?: number }).totalSeatsAvailable?.toLocaleString('en-US')} seats on{' '}
+                  {(rm.loadFactor as { flightLegCount?: number }).flightLegCount} legs.
+                </p>
+                <div style={{ overflow: 'auto', maxHeight: 220 }}>
+                  <table className="module-table" style={{ fontSize: '0.76rem' }}>
+                    <thead>
+                      <tr>
+                        <th>Flight</th>
+                        <th>Route</th>
+                        <th>Sold</th>
+                        <th>Cap</th>
+                        <th>LF</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(
+                        (rm.loadFactor as { perFlightLoadFactor: Array<Record<string, unknown>> }).perFlightLoadFactor ||
+                        []
+                      )
+                        .slice(0, 40)
+                        .map((row) => (
+                          <tr key={String(row.flightId)}>
+                            <td>{String(row.flightNumber)}</td>
+                            <td>
+                              {String(row.origin)}→{String(row.dest)}
+                            </td>
+                            <td>{String(row.seatsSold)}</td>
+                            <td>{String(row.seatsAvailable)}</td>
+                            <td>{formatLoadFactorPercent(row.loadFactor)}</td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
           <pre style={{ maxHeight: 280, overflow: 'auto', background: '#f8fafc', padding: '0.75rem', fontSize: '0.72rem' }}>
             {JSON.stringify(
               {
@@ -210,7 +324,7 @@ export default function SalesCommercialWorkspace({
                   <tr key={String(c.code)}>
                     <td>{String(c.code)}</td>
                     <td>{String(c.name)}</td>
-                    <td>{String(c.default_commission_pct)}</td>
+                    <td>{formatPercent1Decimal(c.default_commission_pct)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -232,8 +346,8 @@ export default function SalesCommercialWorkspace({
                   <tr key={String(r.channel)}>
                     <td>{String(r.channel)}</td>
                     <td>{String(r.bookings)}</td>
-                    <td>{String(r.revenue)}</td>
-                    <td>{String(r.avg_booking_value)}</td>
+                    <td>{formatSalesCurrency(r.revenue)}</td>
+                    <td>{formatSalesCurrency(r.avg_booking_value)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -264,7 +378,7 @@ export default function SalesCommercialWorkspace({
                     <span className="hams-rbac-badge hams-rbac-badge--commercial">{String(c.status)}</span>
                   </td>
                   <td>{String(c.booking_count)}</td>
-                  <td>{String(c.total_spend)}</td>
+                  <td>{formatSalesCurrency(c.total_spend)}</td>
                   <td>{String(c.updated_at || '').slice(0, 10)}</td>
                 </tr>
               ))}
@@ -316,7 +430,7 @@ export default function SalesCommercialWorkspace({
                   <td style={{ fontFamily: 'monospace', fontSize: '0.7rem' }}>{String(a.booking_id).slice(0, 8)}…</td>
                   <td>{String(a.product_code)}</td>
                   <td>{String(a.quantity)}</td>
-                  <td>{String(a.unit_price)}</td>
+                  <td>{formatSalesCurrency(a.unit_price)}</td>
                   <td>{String(a.created_at || '').slice(0, 16)}</td>
                 </tr>
               ))}

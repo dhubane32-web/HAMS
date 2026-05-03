@@ -5,6 +5,12 @@ import toast from 'react-hot-toast';
 import type { UserRole } from '@/lib/roles';
 import { getPublicApiBaseUrl } from '@/lib/api-base';
 import SalesCommercialWorkspace from '@/components/sales/SalesCommercialWorkspace';
+import {
+  formatPercent1Decimal,
+  formatPromoDiscountDisplay,
+  formatSalesCurrency,
+  SALES_DISPLAY_CURRENCY
+} from '@/lib/sales-format';
 
 const API_BASE_URL = getPublicApiBaseUrl();
 
@@ -444,7 +450,7 @@ export default function SalesPage() {
           subtotal: Number(validateForm.subtotal)
         })
       });
-      if (r.valid) toast.success(`Valid — discount ${Number(r.discountAmount).toFixed(2)}`);
+      if (r.valid) toast.success(`Valid — discount ${formatSalesCurrency(r.discountAmount)}`);
       else toast.error(r.message || 'Invalid');
     } catch (err) {
       toast.error((err as Error).message);
@@ -582,7 +588,7 @@ export default function SalesPage() {
                       </td>
                       <td>{String(c.channel || '—')}</td>
                       <td>{String(c.bookings_count)}</td>
-                      <td>{Number.isFinite(Number(c.booking_revenue)) ? Number(c.booking_revenue).toFixed(2) : '0.00'}</td>
+                      <td>{formatSalesCurrency(c.booking_revenue)}</td>
                       <td>{String(c.leads_count)}</td>
                       <td>{String(c.leads_won)}</td>
                     </tr>
@@ -610,9 +616,7 @@ export default function SalesPage() {
                     <tr key={String(p.status)}>
                       <td>{String(p.status)}</td>
                       <td>{String(p.count)}</td>
-                      <td>
-                        {Number.isFinite(Number(p.pipeline_value)) ? Number(p.pipeline_value).toFixed(2) : '0.00'}
-                      </td>
+                      <td>{formatSalesCurrency(p.pipeline_value)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -745,9 +749,7 @@ export default function SalesPage() {
                   <tr key={String(p.status)}>
                     <td>{String(p.status)}</td>
                     <td>{String(p.count)}</td>
-                    <td>
-                      {Number.isFinite(Number(p.pipeline_value)) ? Number(p.pipeline_value).toFixed(2) : '0.00'}
-                    </td>
+                    <td>{formatSalesCurrency(p.pipeline_value)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -808,7 +810,9 @@ export default function SalesPage() {
                 <tr key={String(c.id)}>
                   <td>{String(c.legal_name)}</td>
                   <td>{String(c.billing_email || '—')}</td>
-                  <td>{c.default_discount_percent != null ? String(c.default_discount_percent) : '—'}</td>
+                  <td>
+                    {c.default_discount_percent != null ? formatPercent1Decimal(c.default_discount_percent) : '—'}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -835,6 +839,10 @@ export default function SalesPage() {
               <tr>
                 <th>Company</th>
                 <th>IATA</th>
+                <th>Commission</th>
+                <th>Credit limit</th>
+                <th>Credit balance</th>
+                <th>Debt</th>
                 <th>Linked user</th>
               </tr>
             </thead>
@@ -843,6 +851,10 @@ export default function SalesPage() {
                 <tr key={String(t.id)}>
                   <td>{String(t.company_name)}</td>
                   <td>{String(t.iata_code || '—')}</td>
+                  <td>{t.commission_percent != null ? formatPercent1Decimal(t.commission_percent) : '—'}</td>
+                  <td>{t.credit_limit != null ? formatSalesCurrency(t.credit_limit) : '—'}</td>
+                  <td>{t.credit_balance != null ? formatSalesCurrency(t.credit_balance) : '—'}</td>
+                  <td>{formatSalesCurrency(t.debt_balance)}</td>
                   <td>{String(t.linked_user_name || t.user_id || '—')}</td>
                 </tr>
               ))}
@@ -961,7 +973,7 @@ export default function SalesPage() {
                   <tr key={String(p.id)}>
                     <td>{String(p.code)}</td>
                     <td>{String(p.discount_type)}</td>
-                    <td>{String(p.discount_value)}</td>
+                    <td>{formatPromoDiscountDisplay(p.discount_type, p.discount_value)}</td>
                     <td>
                       {String(p.valid_from)} → {String(p.valid_until)}
                     </td>
@@ -1053,9 +1065,7 @@ export default function SalesPage() {
                 <tr key={String(a.user_id)}>
                   <td>{String(a.full_name)}</td>
                   <td>{String(a.bookings_count)}</td>
-                  <td>
-                    {Number.isFinite(Number(a.booking_revenue)) ? Number(a.booking_revenue).toFixed(2) : '0.00'}
-                  </td>
+                  <td>{formatSalesCurrency(a.booking_revenue)}</td>
                   <td>{String(a.tickets_issued)}</td>
                 </tr>
               ))}
@@ -1103,25 +1113,35 @@ export default function SalesPage() {
                 <th>Name</th>
                 <th>Dates</th>
                 <th>Channel</th>
+                <th>Budget</th>
               </tr>
             </thead>
             <tbody>
               {campaigns.length === 0 && !campaignsError ? (
                 <tr>
-                  <td colSpan={3} style={{ color: '#64748b', fontSize: '0.85rem' }}>
+                  <td colSpan={4} style={{ color: '#64748b', fontSize: '0.85rem' }}>
                     No campaigns yet. Create one above.
                   </td>
                 </tr>
               ) : null}
-              {campaigns.map((c) => (
-                <tr key={String(c.id)}>
-                  <td>{String(c.name)}</td>
-                  <td>
-                    {String(c.start_date)} → {String(c.end_date)}
-                  </td>
-                  <td>{String(c.channel || '—')}</td>
-                </tr>
-              ))}
+              {campaigns.map((c) => {
+                const rawCur = String(c.currency || '').trim().toUpperCase();
+                const cur = /^[A-Z]{3}$/.test(rawCur) ? rawCur : SALES_DISPLAY_CURRENCY;
+                return (
+                  <tr key={String(c.id)}>
+                    <td>{String(c.name)}</td>
+                    <td>
+                      {String(c.start_date)} → {String(c.end_date)}
+                    </td>
+                    <td>{String(c.channel || '—')}</td>
+                    <td>
+                      {c.budget_amount != null && Number.isFinite(Number(c.budget_amount))
+                        ? formatSalesCurrency(c.budget_amount, cur)
+                        : '—'}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </section>
