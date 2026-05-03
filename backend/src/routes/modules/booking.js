@@ -5,8 +5,19 @@ import { computeItineraryPricing } from '../../services/masterDataPricing.js';
 import { syncBookingPaymentStatus } from '../../services/bookingPaymentSync.js';
 import { logFinanceTransaction } from '../../services/financeLedger.js';
 import { validateAndLockPromo, incrementPromoUsage, PromoValidationError } from '../../services/salesPromo.js';
+import {
+  loadTicketDocumentContext,
+  buildEticketPdfBuffer,
+  loadBookingDocumentContext,
+  buildInvoicePdfBuffer,
+  buildReceiptPdfBuffer,
+  sendEticketEmail,
+  isSmtpConfigured
+} from '../../services/ticketDocuments.js';
 
 const router = express.Router();
+
+const ticketDocRoles = ['admin', 'super_admin', 'agent', 'customer_service', 'sales_manager', 'finance'];
 
 const allowedPnrChars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
@@ -84,7 +95,7 @@ async function issueTicketsForBooking(client, bookingId, userId, { requirePaid =
   let newlyIssued = 0;
   for (const row of passengers.rows) {
     const existing = await client.query(
-      `SELECT id, ticket_number, passenger_id
+      `SELECT id, ticket_number, passenger_id, issued_at, ticket_status
        FROM tickets
        WHERE booking_id = $1 AND passenger_id = $2`,
       [bookingId, row.passenger_id]
@@ -1009,6 +1020,134 @@ router.post('/:bookingId/tickets/issue', requireAuth, requireRoles('admin', 'sup
     client.release();
   }
 });
+
+router.get(
+  '/:bookingId/documents/tickets/:ticketId.pdf',
+  requireAuth,
+  requireRoles(...ticketDocRoles),
+  async (req, res) => {
+    const { bookingId, ticketId } = req.params;
+    if (!isUuid(bookingId) || !isUuid(ticketId)) {
+      return res.status(400).json({ message: 'Invalid booking or ticket id.' });
+    }
+    try {
+      const ctx = await loadTicketDocumentContext(pool, bookingId, ticketId);
+      if (!ctx) {
+        return res.status(404).json({ message: 'Ticket not found for this booking.' });
+      }
+      const buf = await buildEticketPdfBuffer(ctx);
+      const filename = `e-ticket-${ctx.ticket.ticket_number}.pdf`;
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `inline; filename="${filename.replace(/"/g, '')}"`);
+      return res.status(200).send(buf);
+    } catch (error) {
+      return res.status(500).json({ message: 'Failed to build e-ticket PDF.', error: error.message });
+    }
+  }
+);
+
+router.get(
+  '/:bookingId/documents/invoice.pdf',
+  requireAuth,
+  requireRoles(...ticketDocRoles),
+  async (req, res) => {
+    const { bookingId } = req.params;
+    if (!isUuid(bookingId)) {
+      return res.status(400).json({ message: 'Invalid booking id.' });
+    }
+    try {
+      const ctx = await loadBookingDocumentContext(pool, bookingId);
+      if (!ctx) {
+        return res.status(404).json({ message: 'Booking not found.' });
+      }
+      const buf = await buildInvoicePdfBuffer(ctx);
+      const filename = `invoice-${ctx.booking.pnr}.pdf`;
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `inline; filename="${filename.replace(/"/g, '')}"`);
+      return res.status(200).send(buf);
+    } catch (error) {
+      return res.status(500).json({ message: 'Failed to build invoice PDF.', error: error.message });
+    }
+  }
+);
+
+router.get(
+  '/:bookingId/documents/payments/:paymentId/receipt.pdf',
+  requireAuth,
+  requireRoles(...ticketDocRoles),
+  async (req, res) => {
+    const { bookingId, paymentId } = req.params;
+    if (!isUuid(bookingId) || !isUuid(paymentId)) {
+      return res.status(400).json({ message: 'Invalid booking or payment id.' });
+    }
+    try {
+      const bRes = await pool.query(`SELECT * FROM bookings WHERE id = $1`, [bookingId]);
+      const booking = bRes.rows[0];
+      if (!booking) {
+        return res.status(404).json({ message: 'Booking not found.' });
+      }
+      const pRes = await pool.query(`SELECT * FROM payments WHERE id = $1 AND booking_id = $2`, [paymentId, bookingId]);
+      const payment = pRes.rows[0];
+      if (!payment) {
+        return res.status(404).json({ message: 'Payment not found on this booking.' });
+      }
+      const buf = await buildReceiptPdfBuffer({ booking, payment });
+      const filename = `receipt-${booking.pnr}-${paymentId.slice(0, 8)}.pdf`;
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `inline; filename="${filename.replace(/"/g, '')}"`);
+      return res.status(200).send(buf);
+    } catch (error) {
+      return res.status(500).json({ message: 'Failed to build receipt PDF.', error: error.message });
+    }
+  }
+);
+
+router.post(
+  '/:bookingId/documents/tickets/:ticketId/email',
+  requireAuth,
+  requireRoles(...ticketDocRoles),
+  async (req, res) => {
+    const { bookingId, ticketId } = req.params;
+    if (!isUuid(bookingId) || !isUuid(ticketId)) {
+      return res.status(400).json({ message: 'Invalid booking or ticket id.' });
+    }
+    if (!isSmtpConfigured()) {
+      return res.status(503).json({
+        message:
+          'Email is not configured on the server. Set SMTP_HOST, SMTP_FROM, and optionally SMTP_PORT, SMTP_USER, SMTP_PASS.',
+        code: 'SMTP_NOT_CONFIGURED'
+      });
+    }
+    try {
+      const ctx = await loadTicketDocumentContext(pool, bookingId, ticketId);
+      if (!ctx) {
+        return res.status(404).json({ message: 'Ticket not found for this booking.' });
+      }
+      const toOverride = req.body?.to != null ? String(req.body.to).trim() : '';
+      const to = toOverride || String(ctx.passenger.email || '').trim();
+      if (!to) {
+        return res.status(400).json({ message: 'Passenger has no email; provide `to` in the request body.' });
+      }
+      const buf = await buildEticketPdfBuffer(ctx);
+      const tkt = ctx.ticket.ticket_number;
+      const pnr = ctx.ticket.pnr;
+      await sendEticketEmail({
+        to,
+        subject: req.body?.subject,
+        pdfBuffer: buf,
+        filename: `e-ticket-${tkt}.pdf`,
+        pnr,
+        ticketNo: tkt
+      });
+      return res.status(200).json({ message: 'E-ticket sent.', to });
+    } catch (error) {
+      if (error.code === 'SMTP_NOT_CONFIGURED') {
+        return res.status(503).json({ message: error.message, code: error.code });
+      }
+      return res.status(500).json({ message: 'Failed to send e-ticket email.', error: error.message });
+    }
+  }
+);
 
 router.get('/pnr/:pnr', requireAuth, requireRoles('admin', 'super_admin', 'agent', 'operations', 'customer_service', 'sales_manager'), async (req, res) => {
   const { pnr } = req.params;
