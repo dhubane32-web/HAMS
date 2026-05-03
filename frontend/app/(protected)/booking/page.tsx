@@ -3,6 +3,12 @@
 import { FormEvent, useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { CSSProperties } from 'react';
 import { getPublicApiBaseUrl } from '@/lib/api-base';
+import {
+  downloadBookingInvoicePdf,
+  downloadTicketPdf,
+  emailTicketPdf,
+  printTicketPdf
+} from '@/lib/booking-documents';
 
 type Flight = {
   id: string;
@@ -45,7 +51,8 @@ type BookingResponse = {
 
 type TicketResponse = {
   pnr: string;
-  tickets: Array<{ id: string; ticket_number: string; issued_at: string }>;
+  bookingId: string;
+  tickets: Array<{ id: string; ticket_number: string; issued_at: string; ticket_status?: string }>;
 };
 
 type SearchResponse = {
@@ -110,6 +117,8 @@ export default function BookingPage() {
   const [collectPayment, setCollectPayment] = useState(true);
   const [bookingNotes, setBookingNotes] = useState('');
   const [isRecordingPayment, setIsRecordingPayment] = useState(false);
+  const [docAction, setDocAction] = useState<string | null>(null);
+  const [docMessage, setDocMessage] = useState('');
 
   function getToken() {
     return localStorage.getItem('hams_token');
@@ -275,6 +284,7 @@ export default function BookingPage() {
   async function handleCreateBooking(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setBookingError('');
+    setDocMessage('');
     setBookingSuccess(null);
     setTicketInfo(null);
 
@@ -413,8 +423,8 @@ export default function BookingPage() {
       }
 
       setBookingSuccess(result);
-      if (result.tickets?.length && result.booking?.pnr) {
-        setTicketInfo({ pnr: result.booking.pnr, tickets: result.tickets });
+      if (result.tickets?.length && result.booking?.pnr && result.booking?.id) {
+        setTicketInfo({ pnr: result.booking.pnr, bookingId: result.booking.id, tickets: result.tickets });
       }
     } catch {
       setBookingError('Unable to create booking.');
@@ -462,8 +472,12 @@ export default function BookingPage() {
             : prev
         );
       }
-      if (data.tickets?.length && bookingSuccess?.booking.pnr) {
-        setTicketInfo({ pnr: bookingSuccess.booking.pnr, tickets: data.tickets });
+      if (data.tickets?.length && bookingSuccess?.booking.pnr && bookingSuccess?.booking.id) {
+        setTicketInfo({
+          pnr: bookingSuccess.booking.pnr,
+          bookingId: bookingSuccess.booking.id,
+          tickets: data.tickets as TicketResponse['tickets']
+        });
       }
     } catch {
       setBookingError('Unable to record payment.');
@@ -500,7 +514,11 @@ export default function BookingPage() {
         setBookingError(result.message || 'Ticket issuance failed.');
         return;
       }
-      setTicketInfo(result);
+      setTicketInfo({
+        pnr: result.pnr,
+        bookingId: bookingSuccess.booking.id,
+        tickets: result.tickets
+      });
     } catch {
       setBookingError('Unable to issue ticket.');
     }
@@ -936,6 +954,23 @@ export default function BookingPage() {
             <p style={{ margin: '0.35rem 0 0' }}>
               Total: {bookingSuccess.booking.total_amount} {bookingSuccess.booking.currency}
             </p>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: '0.65rem' }}>
+              <button
+                type="button"
+                className="secondary"
+                disabled={Boolean(docAction)}
+                style={{ ...buttonStyle, background: '#334155', width: 'auto', fontSize: '0.82rem' }}
+                onClick={() => {
+                  setBookingError('');
+                  setDocAction('inv');
+                  void downloadBookingInvoicePdf(bookingSuccess.booking.id, bookingSuccess.booking.pnr)
+                    .catch((e: Error) => setBookingError(e.message))
+                    .finally(() => setDocAction(null));
+                }}
+              >
+                {docAction === 'inv' ? 'Preparing…' : 'Booking invoice (PDF)'}
+              </button>
+            </div>
             <p style={{ margin: '0.35rem 0 0' }}>
               Payment status:{' '}
               <strong>{String(bookingSuccess.booking.payment_status || 'UNKNOWN').toUpperCase()}</strong>
@@ -972,17 +1007,83 @@ export default function BookingPage() {
         )}
       </section>
 
-      {ticketInfo && (
+      {ticketInfo?.bookingId && (
         <section style={cardStyle}>
-          <h2 style={h2Style}>3) Ticket Issuance</h2>
-          <p style={{ marginTop: 0 }}>
-            Ticket issued for PNR <strong>{ticketInfo.pnr}</strong>
+          <h2 style={h2Style}>3) Ticket issuance &amp; documents</h2>
+          {docMessage ? (
+            <p style={{ marginTop: 0, color: '#047857', fontWeight: 600 }}>{docMessage}</p>
+          ) : null}
+          <p style={{ marginTop: docMessage ? '0.35rem' : 0 }}>
+            PNR <strong>{ticketInfo.pnr}</strong> · Branded e-ticket PDF includes QR, fare/tax lines, itinerary, and seat when
+            checked in.
           </p>
-          {ticketInfo.tickets.map((ticket) => (
-            <div key={ticket.id} style={ticketRowStyle}>
-              Ticket No: <strong>{ticket.ticket_number}</strong>
-            </div>
-          ))}
+          {ticketInfo.tickets.map((ticket) => {
+            const bid = ticketInfo.bookingId;
+            const loadingPrint = docAction === `pr:${ticket.id}`;
+            const loadingDl = docAction === `dl:${ticket.id}`;
+            const loadingEm = docAction === `em:${ticket.id}`;
+            return (
+              <div key={ticket.id} style={{ ...ticketRowStyle, paddingTop: '0.75rem' }}>
+                <div>
+                  Ticket <strong>{ticket.ticket_number}</strong>
+                  {ticket.ticket_status ? ` · ${ticket.ticket_status}` : ''}
+                </div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: '0.5rem' }}>
+                  <button
+                    type="button"
+                    disabled={Boolean(docAction)}
+                    style={{ ...buttonStyle, width: 'auto', fontSize: '0.82rem', padding: '0.45rem 0.65rem' }}
+                    onClick={() => {
+                      setBookingError('');
+                      setDocAction(`pr:${ticket.id}`);
+                      void printTicketPdf(bid, ticket.id).catch((e: Error) => setBookingError(e.message)).finally(() => setDocAction(null));
+                    }}
+                  >
+                    {loadingPrint ? 'Opening…' : 'Print ticket'}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={Boolean(docAction)}
+                    style={{ ...buttonStyle, width: 'auto', fontSize: '0.82rem', padding: '0.45rem 0.65rem', background: '#0f766e' }}
+                    onClick={() => {
+                      setBookingError('');
+                      setDocAction(`dl:${ticket.id}`);
+                      void downloadTicketPdf(bid, ticket.id, ticket.ticket_number)
+                        .catch((e: Error) => setBookingError(e.message))
+                        .finally(() => setDocAction(null));
+                    }}
+                  >
+                    {loadingDl ? 'Downloading…' : 'Download PDF'}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={Boolean(docAction)}
+                    style={{ ...buttonStyle, width: 'auto', fontSize: '0.82rem', padding: '0.45rem 0.65rem', background: '#6d28d9' }}
+                    onClick={() => {
+                      setBookingError('');
+                      setDocAction(`em:${ticket.id}`);
+                      void emailTicketPdf(bid, ticket.id)
+                        .then(() => {
+                          setBookingError('');
+                          setDocMessage('E-ticket emailed to the passenger address on file.');
+                        })
+                        .catch((e: Error & { code?: string }) => {
+                          setDocMessage('');
+                          setBookingError(
+                            e.code === 'SMTP_NOT_CONFIGURED'
+                              ? 'Email not configured on server (SMTP_HOST, SMTP_FROM).'
+                              : e.message
+                          );
+                        })
+                        .finally(() => setDocAction(null));
+                    }}
+                  >
+                    {loadingEm ? 'Sending…' : 'Email ticket'}
+                  </button>
+                </div>
+              </div>
+            );
+          })}
         </section>
       )}
     </main>
