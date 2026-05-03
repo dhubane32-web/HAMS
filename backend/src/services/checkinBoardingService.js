@@ -2,6 +2,8 @@
  * Shared check-in / boarding lookup and seat inventory (airline-style operations).
  */
 
+import { isFlightOpenForPassengerCheckin } from '../lib/flightOccStatus.js';
+
 export function computeBoardingDisplayIso(flight) {
   if (flight.boarding_time) {
     return new Date(flight.boarding_time).toISOString();
@@ -203,9 +205,9 @@ export async function buildCheckinLookupPayload(pool, booking, lookupMeta = {}) 
 
   const passengers = Object.values(byPassenger);
 
-  const blockedFlight = new Set(['CANCELLED', 'DEPARTED', 'IN_AIR', 'LANDED']);
+  const relaxScheduled = String(process.env.OCC_RELAX_CHECKIN_STATUSES || '').toLowerCase() === 'true';
   const flightStatusIssues = legs
-    .filter((leg) => blockedFlight.has(String(leg.status || '').toUpperCase()))
+    .filter((leg) => !isFlightOpenForPassengerCheckin(String(leg.status || ''), { relaxScheduled }))
     .map((leg) => ({
       flight_id: leg.id,
       flight_number: leg.flight_number,

@@ -51,12 +51,12 @@ function quickLinksForRole(role) {
     { label: 'Support inbox', href: '/customer-service' },
     { label: 'Reports', href: '/reports' },
     { label: 'Analytics', href: '/reports-analytics' },
-    { label: 'Master data', href: '/settings-master-data' },
+    { label: 'Master data', href: '/settings' },
     { label: 'System settings', href: '/system-settings' },
     { label: 'Administration', href: '/system-administration' },
     { label: 'Aircraft & MX', href: '/maintenance' },
     { label: 'User admin', href: '/admin' },
-    { label: 'Workspace settings', href: '/settings' }
+    { label: 'Workspace settings', href: '/workspace-settings' }
   ];
   if (role === 'super_admin' || role === 'admin') return all;
   if (role === 'finance') {
@@ -85,7 +85,7 @@ function quickLinksForRole(role) {
   if (role === 'crew') {
     return [
       { label: 'Alerts & notices', href: '/notifications' },
-      { label: 'Workspace settings', href: '/settings' }
+      { label: 'Workspace settings', href: '/workspace-settings' }
     ];
   }
   if (role === 'maintenance') {

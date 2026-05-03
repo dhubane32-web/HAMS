@@ -36,6 +36,92 @@ async function generateTicketNumber(client) {
   throw new Error('Unable to generate ticket number.');
 }
 
+/**
+ * Issue one ticket per passenger when missing. Idempotent per passenger.
+ * @returns {{ booking: object, tickets: object[], newlyIssued: number }}
+ */
+async function issueTicketsForBooking(client, bookingId, userId, { requirePaid = true } = {}) {
+  const bookingResult = await client.query(
+    `SELECT id, pnr, booking_status, payment_status, total_amount, currency
+     FROM bookings WHERE id = $1`,
+    [bookingId]
+  );
+  const booking = bookingResult.rows[0];
+  if (!booking) {
+    const err = new Error('Booking not found.');
+    err.statusCode = 404;
+    throw err;
+  }
+  if (String(booking.booking_status || '').toUpperCase() === 'CANCELLED') {
+    const err = new Error('Cannot issue tickets for a cancelled booking.');
+    err.statusCode = 400;
+    throw err;
+  }
+  if (requirePaid) {
+    await syncBookingPaymentStatus(client, bookingId);
+    const paidRow = await client.query(`SELECT payment_status FROM bookings WHERE id = $1`, [bookingId]);
+    if (!paidRow.rows[0] || String(paidRow.rows[0].payment_status || '').toUpperCase() !== 'PAID') {
+      const err = new Error(
+        'Tickets can only be issued after the booking is fully paid. Record a successful payment or enable collect payment when creating the booking.'
+      );
+      err.statusCode = 400;
+      err.code = 'PAYMENT_REQUIRED';
+      throw err;
+    }
+  }
+
+  const passengers = await client.query(
+    `SELECT bp.passenger_id FROM booking_passengers bp WHERE bp.booking_id = $1`,
+    [bookingId]
+  );
+  if (passengers.rowCount === 0) {
+    const err = new Error('No passengers found for booking.');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const issuedTickets = [];
+  let newlyIssued = 0;
+  for (const row of passengers.rows) {
+    const existing = await client.query(
+      `SELECT id, ticket_number, passenger_id
+       FROM tickets
+       WHERE booking_id = $1 AND passenger_id = $2`,
+      [bookingId, row.passenger_id]
+    );
+
+    if (existing.rowCount > 0) {
+      issuedTickets.push(existing.rows[0]);
+      continue;
+    }
+
+    const ticketNumber = await generateTicketNumber(client);
+    const ticket = await client.query(
+      `INSERT INTO tickets (ticket_number, booking_id, passenger_id, issued_by, ticket_status)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING id, ticket_number, passenger_id, issued_at, ticket_status`,
+      [ticketNumber, bookingId, row.passenger_id, userId, 'ISSUED']
+    );
+
+    issuedTickets.push(ticket.rows[0]);
+    newlyIssued += 1;
+  }
+
+  if (newlyIssued > 0) {
+    await logFinanceTransaction(client, {
+      txnType: 'TICKET_ISSUED',
+      amount: null,
+      currency: booking.currency || 'USD',
+      bookingId,
+      description: `Issued ${newlyIssued} ticket(s) for PNR ${booking.pnr}`,
+      metadata: { pnr: booking.pnr, newlyIssued },
+      userId
+    });
+  }
+
+  return { booking, tickets: issuedTickets, newlyIssued };
+}
+
 function splitFullName(fullName) {
   const clean = String(fullName || '').trim().replace(/\s+/g, ' ');
   if (!clean) return { firstName: '', lastName: '' };
@@ -232,12 +318,87 @@ router.get(
   }
 );
 
+const FLIGHT_SEARCH_BASE_SELECT = `
+  f.id,
+  f.flight_number,
+  f.departure_airport,
+  f.arrival_airport,
+  f.departure_time,
+  f.arrival_time,
+  f.status,
+  a.tail_number,
+  a.model,
+  a.seat_capacity,
+  GREATEST(0, (EXTRACT(EPOCH FROM (f.arrival_time - f.departure_time)) / 60)::int) AS duration_minutes,
+  GREATEST(
+    0,
+    COALESCE(a.seat_capacity, 0) - COALESCE(
+      (
+        SELECT COUNT(DISTINCT bp.passenger_id)::int
+        FROM booking_flights bf
+        JOIN bookings b ON b.id = bf.booking_id AND UPPER(TRIM(COALESCE(b.booking_status, ''))) <> 'CANCELLED'
+        JOIN booking_passengers bp ON bp.booking_id = b.id
+        WHERE bf.flight_id = f.id
+      ),
+      0
+    )
+  )::int AS seats_available`;
+
+async function queryFlightsForSearch({ fromAir, toAir, travelDate, fareClassUuid }) {
+  const params = [fromAir, toAir, travelDate, fareClassUuid];
+  const sqlWithFare = `
+        SELECT
+          ${FLIGHT_SEARCH_BASE_SELECT},
+          legfare.amount AS fare_amount,
+          legfare.currency AS fare_currency
+        FROM flights f
+        LEFT JOIN aircraft a ON a.id = f.aircraft_id
+        LEFT JOIN LATERAL (
+          SELECT rf.amount, rf.currency
+          FROM md_routes r
+          JOIN md_airports o ON o.id = r.origin_airport_id
+          JOIN md_airports d ON d.id = r.dest_airport_id
+          JOIN md_route_fares rf ON rf.route_id = r.id AND rf.is_active = TRUE
+            AND ($4::uuid IS NULL OR rf.fare_class_id = $4::uuid)
+          WHERE r.is_active = TRUE
+            AND UPPER(o.iata_code) = UPPER(f.departure_airport)
+            AND UPPER(d.iata_code) = UPPER(f.arrival_airport)
+          ORDER BY rf.amount ASC NULLS LAST
+          LIMIT 1
+        ) legfare ON true
+        WHERE
+          UPPER(f.departure_airport) = UPPER($1)
+          AND UPPER(f.arrival_airport) = UPPER($2)
+          AND (f.departure_time AT TIME ZONE 'UTC')::date = $3::date
+        ORDER BY f.departure_time ASC`;
+  const sqlNoFare = `
+        SELECT
+          ${FLIGHT_SEARCH_BASE_SELECT},
+          NULL::numeric AS fare_amount,
+          NULL::text AS fare_currency
+        FROM flights f
+        LEFT JOIN aircraft a ON a.id = f.aircraft_id
+        WHERE
+          UPPER(f.departure_airport) = UPPER($1)
+          AND UPPER(f.arrival_airport) = UPPER($2)
+          AND (f.departure_time AT TIME ZONE 'UTC')::date = $3::date
+        ORDER BY f.departure_time ASC`;
+  try {
+    return await pool.query(sqlWithFare, params);
+  } catch (err) {
+    if (err && (err.code === '42P01' || err.code === '42703' || String(err.message || '').includes('md_'))) {
+      return pool.query(sqlNoFare, [fromAir, toAir, travelDate]);
+    }
+    throw err;
+  }
+}
+
 router.get(
   '/flights/search',
   requireAuth,
   requireRoles('admin', 'super_admin', 'agent', 'operations', 'customer_service', 'sales_manager'),
   async (req, res) => {
-    const { from, to, date, tripType, returnDate } = req.query;
+    const { from, to, date, tripType, returnDate, fareClassId } = req.query;
 
     if (!from || !to || !date) {
       return res.status(400).json({ message: 'from, to, and date are required query parameters.' });
@@ -259,52 +420,24 @@ router.get(
       }
     }
 
+    const fareClassUuid = fareClassId && isUuid(String(fareClassId)) ? String(fareClassId) : null;
+
     try {
-      const outboundFlights = await pool.query(
-        `SELECT
-          f.id,
-          f.flight_number,
-          f.departure_airport,
-          f.arrival_airport,
-          f.departure_time,
-          f.arrival_time,
-          f.status,
-          a.tail_number,
-          a.model,
-          a.seat_capacity
-        FROM flights f
-        LEFT JOIN aircraft a ON a.id = f.aircraft_id
-        WHERE
-          UPPER(f.departure_airport) = UPPER($1)
-          AND UPPER(f.arrival_airport) = UPPER($2)
-          AND (f.departure_time AT TIME ZONE 'UTC')::date = $3::date
-        ORDER BY f.departure_time ASC`,
-        [from, to, date]
-      );
+      const outboundFlights = await queryFlightsForSearch({
+        fromAir: from,
+        toAir: to,
+        travelDate: date,
+        fareClassUuid
+      });
 
       let inboundFlights = { rows: [] };
       if (normalizedTripType === 'RETURN') {
-        inboundFlights = await pool.query(
-          `SELECT
-            f.id,
-            f.flight_number,
-            f.departure_airport,
-            f.arrival_airport,
-            f.departure_time,
-            f.arrival_time,
-            f.status,
-            a.tail_number,
-            a.model,
-            a.seat_capacity
-          FROM flights f
-          LEFT JOIN aircraft a ON a.id = f.aircraft_id
-          WHERE
-            UPPER(f.departure_airport) = UPPER($1)
-            AND UPPER(f.arrival_airport) = UPPER($2)
-            AND (f.departure_time AT TIME ZONE 'UTC')::date = $3::date
-          ORDER BY f.departure_time ASC`,
-          [to, from, returnDate]
-        );
+        inboundFlights = await queryFlightsForSearch({
+          fromAir: to,
+          toAir: from,
+          travelDate: returnDate,
+          fareClassUuid
+        });
       }
 
       return res.status(200).json({
@@ -312,6 +445,7 @@ router.get(
         route: `${String(from).toUpperCase()}-${String(to).toUpperCase()}`,
         departureDate: date,
         returnDate: returnDate || null,
+        fareClassId: fareClassUuid,
         outboundFlights: outboundFlights.rows,
         inboundFlights: inboundFlights.rows,
         flights: outboundFlights.rows
@@ -375,6 +509,12 @@ const pricingErrorMap = {
   CURRENCY_MISMATCH_LEGS: [400, 'Inbound and outbound fares use different currencies.']
 };
 
+const PRICING_TOLERANCE = 0.03;
+
+function roundMoney2(n) {
+  return Math.round(Number(n) * 100) / 100;
+}
+
 router.post('/', requireAuth, requireRoles('admin', 'super_admin', 'agent', 'customer_service', 'sales_manager'), async (req, res) => {
   const {
     tripType = 'ONE_WAY',
@@ -392,7 +532,9 @@ router.post('/', requireAuth, requireRoles('admin', 'super_admin', 'agent', 'cus
     collectPayment,
     notes,
     promoCode,
-    campaignId
+    campaignId,
+    pricedTotalPerPax,
+    pricedCurrency
   } = req.body;
 
   const shouldCollectPayment = collectPayment !== false;
@@ -516,6 +658,31 @@ router.post('/', requireAuth, requireRoles('admin', 'super_admin', 'agent', 'cus
         return res.status(400).json({ message: 'Inbound fare amount must be a positive number.' });
       }
       totalPerPaxCharged = outboundAmountPerPax + inboundAmountPerPax;
+    }
+
+    if (fareClassUuid) {
+      const quoted =
+        pricedTotalPerPax != null && pricedTotalPerPax !== '' ? Number(pricedTotalPerPax) : null;
+      if (quoted != null && Number.isFinite(quoted)) {
+        if (Math.abs(roundMoney2(quoted) - roundMoney2(totalPerPaxCharged)) > PRICING_TOLERANCE) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({
+            message:
+              'Quoted price does not match current master-data pricing. Refresh the pricing preview and try again.',
+            code: 'PRICING_MISMATCH'
+          });
+        }
+        const qc = pricedCurrency != null && String(pricedCurrency).trim() !== ''
+          ? String(pricedCurrency).trim().toUpperCase()
+          : null;
+        if (qc && qc !== String(bookingCurrency).trim().toUpperCase()) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({
+            message: 'Quoted currency does not match priced itinerary.',
+            code: 'PRICING_MISMATCH'
+          });
+        }
+      }
     }
 
     const baseTotalAmount = totalPerPaxCharged * passengers.length;
@@ -746,6 +913,23 @@ router.post('/', requireAuth, requireRoles('admin', 'super_admin', 'agent', 'cus
       ]
     );
 
+    let ticketsIssued = [];
+    if (shouldCollectPayment) {
+      try {
+        const issueOut = await issueTicketsForBooking(client, booking.id, req.user.userId, {
+          requirePaid: true
+        });
+        ticketsIssued = issueOut.tickets;
+      } catch (tickErr) {
+        await client.query('ROLLBACK');
+        const sc = tickErr.statusCode || 500;
+        return res.status(sc).json({
+          message: tickErr.message || 'Ticket issuance failed.',
+          code: tickErr.code
+        });
+      }
+    }
+
     await client.query('COMMIT');
 
     return res.status(201).json({
@@ -764,7 +948,8 @@ router.post('/', requireAuth, requireRoles('admin', 'super_admin', 'agent', 'cus
           ...(pricingBreakdown ? { breakdown: pricingBreakdown } : {})
         },
         passengers: passengerRows
-      }
+      },
+      tickets: ticketsIssued
     });
   } catch (error) {
     await client.query('ROLLBACK');
@@ -784,86 +969,18 @@ router.post('/:bookingId/tickets/issue', requireAuth, requireRoles('admin', 'sup
   try {
     await client.query('BEGIN');
 
-    const bookingResult = await client.query(
-      `SELECT id, pnr, booking_status, payment_status, total_amount, currency
-       FROM bookings WHERE id = $1`,
-      [bookingId]
-    );
-    const booking = bookingResult.rows[0];
-
-    if (!booking) {
+    let booking;
+    let issuedTickets;
+    try {
+      const out = await issueTicketsForBooking(client, bookingId, req.user.userId, { requirePaid: true });
+      booking = out.booking;
+      issuedTickets = out.tickets;
+    } catch (e) {
       await client.query('ROLLBACK');
-      return res.status(404).json({ message: 'Booking not found.' });
-    }
-
-    if (String(booking.booking_status).toUpperCase() === 'CANCELLED') {
-      await client.query('ROLLBACK');
-      return res.status(400).json({ message: 'Cannot issue tickets for a cancelled booking.' });
-    }
-
-    await syncBookingPaymentStatus(client, bookingId);
-    const paidCheck = await client.query(
-      `SELECT payment_status, total_amount FROM bookings WHERE id = $1`,
-      [bookingId]
-    );
-    const row = paidCheck.rows[0];
-    if (!row || String(row.payment_status).toUpperCase() !== 'PAID') {
-      await client.query('ROLLBACK');
-      return res.status(400).json({
-        message:
-          'Tickets can only be issued after the booking is fully paid. Record a successful payment or enable collect payment when creating the booking.'
-      });
-    }
-
-    const passengers = await client.query(
-      `SELECT bp.passenger_id
-       FROM booking_passengers bp
-       WHERE bp.booking_id = $1`,
-      [bookingId]
-    );
-
-    if (passengers.rowCount === 0) {
-      await client.query('ROLLBACK');
-      return res.status(400).json({ message: 'No passengers found for booking.' });
-    }
-
-    const issuedTickets = [];
-    let newlyIssued = 0;
-    for (const row of passengers.rows) {
-      const existing = await client.query(
-        `SELECT id, ticket_number, passenger_id
-         FROM tickets
-         WHERE booking_id = $1 AND passenger_id = $2`,
-        [bookingId, row.passenger_id]
-      );
-
-      if (existing.rowCount > 0) {
-        issuedTickets.push(existing.rows[0]);
-        continue;
+      if (e.statusCode) {
+        return res.status(e.statusCode).json({ message: e.message, code: e.code });
       }
-
-      const ticketNumber = await generateTicketNumber(client);
-      const ticket = await client.query(
-        `INSERT INTO tickets (ticket_number, booking_id, passenger_id, issued_by, ticket_status)
-         VALUES ($1, $2, $3, $4, $5)
-         RETURNING id, ticket_number, passenger_id, issued_at, ticket_status`,
-        [ticketNumber, bookingId, row.passenger_id, req.user.userId, 'ISSUED']
-      );
-
-      issuedTickets.push(ticket.rows[0]);
-      newlyIssued += 1;
-    }
-
-    if (newlyIssued > 0) {
-      await logFinanceTransaction(client, {
-        txnType: 'TICKET_ISSUED',
-        amount: null,
-        currency: booking.currency || 'USD',
-        bookingId,
-        description: `Issued ${newlyIssued} ticket(s) for PNR ${booking.pnr}`,
-        metadata: { pnr: booking.pnr, newlyIssued },
-        userId: req.user.userId
-      });
+      throw e;
     }
 
     await client.query(
@@ -1132,6 +1249,23 @@ router.post(
         userId: req.user.userId
       });
       await syncBookingPaymentStatus(client, bookingId);
+      let paymentTickets = [];
+      if (statusRaw === 'PAID') {
+        try {
+          const issueOut = await issueTicketsForBooking(client, bookingId, req.user.userId, {
+            requirePaid: true
+          });
+          paymentTickets = issueOut.tickets;
+        } catch (e) {
+          if (!(e.statusCode === 400 && e.code === 'PAYMENT_REQUIRED')) {
+            await client.query('ROLLBACK');
+            if (e.statusCode) {
+              return res.status(e.statusCode).json({ message: e.message, code: e.code });
+            }
+            throw e;
+          }
+        }
+      }
       const fresh = await client.query(
         `SELECT id, pnr, payment_status, total_amount, currency FROM bookings WHERE id = $1`,
         [bookingId]
@@ -1148,7 +1282,7 @@ router.post(
         ]
       );
       await client.query('COMMIT');
-      return res.status(201).json({ booking: fresh.rows[0] });
+      return res.status(201).json({ booking: fresh.rows[0], tickets: paymentTickets });
     } catch (error) {
       await client.query('ROLLBACK');
       return res.status(500).json({ message: 'Failed to record payment.', error: error.message });

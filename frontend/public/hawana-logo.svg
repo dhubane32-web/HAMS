@@ -1,0 +1,23 @@
+<svg width="560" height="240" viewBox="0 0 560 240" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="goldWing" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#FFE58A"/>
+      <stop offset="60%" stop-color="#FFD54A"/>
+      <stop offset="100%" stop-color="#C98A18"/>
+    </linearGradient>
+    <linearGradient id="blueWave" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#53C5F5"/>
+      <stop offset="100%" stop-color="#0070B8"/>
+    </linearGradient>
+  </defs>
+
+  <g transform="translate(78 16)">
+    <path d="M106 124C136 102 154 76 154 44C176 63 183 96 168 123C152 154 119 174 74 187C90 172 103 153 106 124Z" fill="url(#goldWing)"/>
+    <path d="M103 120C86 95 67 80 44 79C58 64 83 60 104 72C128 86 144 109 151 140C138 128 121 122 103 120Z" fill="url(#goldWing)"/>
+    <path d="M168 160C205 152 245 163 294 190C238 196 191 191 152 176C155 169 160 164 168 160Z" fill="url(#blueWave)"/>
+    <path d="M150 174C188 176 228 188 270 212C223 216 182 210 145 194C144 187 146 180 150 174Z" fill="url(#blueWave)"/>
+  </g>
+
+  <text x="116" y="166" fill="#001F5B" font-family="Poppins, Arial, sans-serif" font-size="86" font-weight="700" letter-spacing="5">HAWANA</text>
+  <text x="178" y="216" fill="#001F5B" font-family="Poppins, Arial, sans-serif" font-size="48" font-weight="600" letter-spacing="13">AIRWAYS</text>
+</svg>

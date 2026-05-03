@@ -1,0 +1,6 @@
+<svg width="220" height="40" viewBox="0 0 220 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <path d="M4 28L18 8L22 10L12 28H4Z" fill="white" fill-opacity="0.95"/>
+  <path d="M18 8L32 4L28 14L20 12L18 8Z" fill="white" fill-opacity="0.85"/>
+  <path d="M12 28L28 32L24 36L10 30L12 28Z" fill="white" fill-opacity="0.75"/>
+  <text x="42" y="26" fill="white" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="15" font-weight="700" letter-spacing="0.12em">HAWANA AIRWAYS</text>
+</svg>

@@ -12,15 +12,42 @@ const router = express.Router();
 
 const FLIGHT_STATUSES = [
   'SCHEDULED',
+  'CHECKIN_OPEN',
   'BOARDING',
+  'GATE_CLOSED',
   'DEPARTED',
   'IN_AIR',
-  'LANDED',
+  'ARRIVED',
   'DELAYED',
   'CANCELLED'
 ];
 
-const TERMINAL_NO_OVERLAP = ['CANCELLED', 'LANDED'];
+/** Minimum ground time between consecutive flights on the same tail (dispatch / scheduling). */
+const MIN_TURNAROUND_MINUTES = 45;
+
+/** Aircraft/crew overlap ignores flights in these terminal states (LANDED kept for legacy rows). */
+const TERMINAL_NO_OVERLAP = ['CANCELLED', 'ARRIVED', 'LANDED'];
+
+function sqlFlightNotTerminal(alias = 'f') {
+  return `UPPER(TRIM(${alias}.status)) NOT IN ('CANCELLED','ARRIVED','LANDED')`;
+}
+
+function assertDispatchReleaseChecklist(body) {
+  const c = body?.checklist || {};
+  const keys = [
+    ['aircraftRelease', 'Aircraft release'],
+    ['crewRelease', 'Crew release'],
+    ['weatherOk', 'Weather check'],
+    ['notamOk', 'NOTAM check'],
+    ['captainApproval', 'Captain approval'],
+    ['dispatcherApproval', 'Dispatcher approval']
+  ];
+  const missing = keys.filter(([k]) => !c[k]).map(([, label]) => label);
+  if (missing.length) {
+    return { ok: false, message: `Dispatch checklist incomplete: confirm ${missing.join(', ')}.` };
+  }
+  return { ok: true, checklist: Object.fromEntries(keys.map(([k]) => [k, true])) };
+}
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -33,16 +60,71 @@ function normalizeStatus(s) {
   return String(s || '').trim().toUpperCase();
 }
 
-async function findAircraftOverlap(client, { aircraftId, depart, arrive, excludeFlightId }) {
+/** OCC-style guardrails for PATCH status (use POST /cancel with a reason to cancel). */
+function validateOpsStatusTransition(prevRaw, nextRaw) {
+  const p = normalizeStatus(prevRaw);
+  const n = normalizeStatus(nextRaw);
+  if (p === n) return { ok: true };
+  if (p === 'CANCELLED') {
+    return { ok: false, message: 'Cancelled flights cannot change status (reopen is not supported).' };
+  }
+  if (n === 'CANCELLED') {
+    return { ok: false, message: 'Use the cancel flight action with a required reason instead of PATCH status.' };
+  }
+  if (p === 'ARRIVED' && n !== 'ARRIVED') {
+    return { ok: false, message: 'Cannot change status after arrival.' };
+  }
+  const postDep = ['DEPARTED', 'IN_AIR'];
+  const preDep = ['SCHEDULED', 'CHECKIN_OPEN', 'BOARDING', 'GATE_CLOSED'];
+  if (postDep.includes(p) && preDep.includes(n)) {
+    return { ok: false, message: `Cannot revert flight from ${p} to ${n}.` };
+  }
+  if (n === 'IN_AIR' && !['DEPARTED', 'IN_AIR'].includes(p)) {
+    return { ok: false, message: 'IN_AIR is only valid after the aircraft has departed.' };
+  }
+  if (
+    n === 'DEPARTED' &&
+    !['CHECKIN_OPEN', 'BOARDING', 'GATE_CLOSED', 'DEPARTED', 'IN_AIR', 'DELAYED'].includes(p)
+  ) {
+    return { ok: false, message: `DEPARTED is not valid from ${p} — open check-in / boarding / gate first.` };
+  }
+  return { ok: true };
+}
+
+/** Suggest next flight number from recent rows (PREFIX + digits pattern). */
+function computeSuggestedFlightNumber(rows) {
+  let maxNum = 0;
+  let prefix = 'HW';
+  let digitWidth = 3;
+  for (const row of rows) {
+    const raw = String(row?.flight_number || '').trim().toUpperCase();
+    const m = raw.match(/^([A-Z]{1,4})(\d{1,5})$/);
+    if (!m) continue;
+    const n = parseInt(m[2], 10);
+    if (!Number.isFinite(n)) continue;
+    if (n >= maxNum) {
+      maxNum = n;
+      prefix = m[1];
+      digitWidth = Math.max(3, m[2].length);
+    }
+  }
+  if (maxNum <= 0) return `${prefix}001`;
+  const next = maxNum + 1;
+  const width = Math.max(digitWidth, String(next).length);
+  return `${prefix}${String(next).padStart(width, '0')}`.slice(0, 20);
+}
+
+async function findAircraftOverlap(client, { aircraftId, depart, arrive, excludeFlightId, turnaroundMin }) {
+  const tmin = Number.isFinite(Number(turnaroundMin)) ? Math.max(0, Math.min(Number(turnaroundMin), 24 * 60)) : MIN_TURNAROUND_MINUTES;
   const r = await client.query(
     `SELECT f.id, f.flight_number, f.departure_time, f.arrival_time
      FROM flights f
      WHERE f.aircraft_id = $1
        AND ($4::uuid IS NULL OR f.id <> $4::uuid)
-       AND UPPER(TRIM(f.status)) NOT IN ('CANCELLED', 'LANDED')
-       AND f.departure_time < $3::timestamptz
-       AND f.arrival_time > $2::timestamptz`,
-    [aircraftId, depart, arrive, excludeFlightId || null]
+       AND ${sqlFlightNotTerminal('f')}
+       AND f.departure_time < $3::timestamptz + ($5::int * interval '1 minute')
+       AND f.arrival_time + ($5::int * interval '1 minute') > $2::timestamptz`,
+    [aircraftId, depart, arrive, excludeFlightId || null, tmin]
   );
   return r.rows[0] || null;
 }
@@ -54,7 +136,7 @@ async function findCrewOverlap(client, { crewUserId, depart, arrive, excludeFlig
      JOIN crew_assignments ca ON ca.flight_id = f.id
      WHERE ca.crew_user_id = $1
        AND ($4::uuid IS NULL OR f.id <> $4::uuid)
-       AND UPPER(TRIM(f.status)) NOT IN ('CANCELLED', 'LANDED')
+       AND ${sqlFlightNotTerminal('f')}
        AND f.departure_time < $3::timestamptz
        AND f.arrival_time > $2::timestamptz`,
     [crewUserId, depart, arrive, excludeFlightId || null]
@@ -66,6 +148,42 @@ router.get('/health', (_req, res) => {
   res.json({ module: 'operations', status: 'ready' });
 });
 
+async function loadOperationsDashboard(dateStr) {
+  const flights = await pool.query(
+    `SELECT
+      f.id,
+      f.flight_number,
+      f.departure_airport,
+      f.arrival_airport,
+      f.departure_time,
+      f.arrival_time,
+      f.gate,
+      f.boarding_time,
+      f.status,
+      f.aircraft_id,
+      f.route_id,
+      f.cancellation_reason,
+      f.cancelled_at,
+      a.tail_number,
+      a.model,
+      r.label AS route_label
+    FROM flights f
+    LEFT JOIN aircraft a ON a.id = f.aircraft_id
+    LEFT JOIN ops_routes r ON r.id = f.route_id
+    WHERE (f.departure_time AT TIME ZONE 'UTC')::date = $1::date
+    ORDER BY f.departure_time ASC`,
+    [dateStr]
+  );
+  const byStatus = {};
+  for (const s of FLIGHT_STATUSES) byStatus[s] = 0;
+  for (const row of flights.rows) {
+    const k = normalizeStatus(row.status) || 'SCHEDULED';
+    if (byStatus[k] === undefined) byStatus[k] = 0;
+    byStatus[k] += 1;
+  }
+  return { date: dateStr, flights: flights.rows, summaryByStatus: byStatus };
+}
+
 router.get(
   '/dashboard/today',
   requireAuth,
@@ -73,39 +191,26 @@ router.get(
   async (_req, res) => {
     const today = new Date().toISOString().slice(0, 10);
     try {
-      const flights = await pool.query(
-        `SELECT
-          f.id,
-          f.flight_number,
-          f.departure_airport,
-          f.arrival_airport,
-          f.departure_time,
-          f.arrival_time,
-          f.gate,
-          f.boarding_time,
-          f.status,
-          f.aircraft_id,
-          f.route_id,
-          f.cancellation_reason,
-          f.cancelled_at,
-          a.tail_number,
-          a.model,
-          r.label AS route_label
-        FROM flights f
-        LEFT JOIN aircraft a ON a.id = f.aircraft_id
-        LEFT JOIN ops_routes r ON r.id = f.route_id
-        WHERE DATE(f.departure_time AT TIME ZONE 'UTC') = DATE($1::date)
-        ORDER BY f.departure_time ASC`,
-        [today]
-      );
-      const byStatus = {};
-      for (const s of FLIGHT_STATUSES) byStatus[s] = 0;
-      for (const row of flights.rows) {
-        const k = normalizeStatus(row.status) || 'SCHEDULED';
-        if (byStatus[k] === undefined) byStatus[k] = 0;
-        byStatus[k] += 1;
-      }
-      return res.status(200).json({ date: today, flights: flights.rows, summaryByStatus: byStatus });
+      const body = await loadOperationsDashboard(today);
+      return res.status(200).json(body);
+    } catch (error) {
+      return res.status(500).json({ message: 'Failed to load operations dashboard.', error: error.message });
+    }
+  }
+);
+
+router.get(
+  '/dashboard',
+  requireAuth,
+  requireRoles('admin', 'super_admin', 'operations', 'maintenance', 'agent', 'customer_service'),
+  async (req, res) => {
+    const raw = req.query.date ? String(req.query.date).trim().slice(0, 10) : new Date().toISOString().slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+      return res.status(400).json({ message: 'Invalid date. Use date=YYYY-MM-DD (UTC calendar date for departures).' });
+    }
+    try {
+      const body = await loadOperationsDashboard(raw);
+      return res.status(200).json(body);
     } catch (error) {
       return res.status(500).json({ message: 'Failed to load operations dashboard.', error: error.message });
     }
@@ -277,6 +382,68 @@ router.get(
   }
 );
 
+router.get(
+  '/flights/suggest-flight-number',
+  requireAuth,
+  requireRoles('admin', 'super_admin', 'operations', 'maintenance', 'agent'),
+  async (_req, res) => {
+    try {
+      const r = await pool.query(
+        `SELECT flight_number
+         FROM flights
+         WHERE flight_number IS NOT NULL AND TRIM(flight_number) <> ''
+         ORDER BY created_at DESC NULLS LAST
+         LIMIT 500`
+      );
+      const suggestedFlightNumber = computeSuggestedFlightNumber(r.rows);
+      return res.status(200).json({ suggestedFlightNumber });
+    } catch (error) {
+      return res.status(500).json({ message: 'Failed to suggest flight number.', error: error.message });
+    }
+  }
+);
+
+/** Recent flights for scheduling UI (newest departures first). */
+router.get(
+  '/flights/recent',
+  requireAuth,
+  requireRoles('admin', 'super_admin', 'operations', 'maintenance', 'agent', 'customer_service'),
+  async (req, res) => {
+    const raw = parseInt(String(req.query.limit || '40'), 10);
+    const limit = Number.isFinite(raw) ? Math.min(100, Math.max(5, raw)) : 40;
+    try {
+      const flights = await pool.query(
+        `SELECT
+          f.id,
+          f.flight_number,
+          f.departure_airport,
+          f.arrival_airport,
+          f.departure_time,
+          f.arrival_time,
+          f.gate,
+          f.boarding_time,
+          f.status,
+          f.aircraft_id,
+          f.route_id,
+          f.cancellation_reason,
+          f.cancelled_at,
+          a.tail_number,
+          a.model,
+          r.label AS route_label
+        FROM flights f
+        LEFT JOIN aircraft a ON a.id = f.aircraft_id
+        LEFT JOIN ops_routes r ON r.id = f.route_id
+        ORDER BY f.departure_time DESC
+        LIMIT $1`,
+        [limit]
+      );
+      return res.status(200).json({ flights: flights.rows });
+    } catch (error) {
+      return res.status(500).json({ message: 'Failed to load recent flights.', error: error.message });
+    }
+  }
+);
+
 router.get('/aircraft', requireAuth, requireRoles('admin', 'super_admin', 'operations', 'maintenance', 'agent'), async (_req, res) => {
   try {
     const aircraft = await pool.query(
@@ -385,7 +552,7 @@ router.post('/flights', requireAuth, requireRoles('admin', 'super_admin', 'opera
     if (overlap) {
       await client.query('ROLLBACK');
       return res.status(409).json({
-        message: `Aircraft is already assigned to overlapping flight ${overlap.flight_number}.`,
+        message: `Aircraft conflicts with flight ${overlap.flight_number} (includes ${MIN_TURNAROUND_MINUTES} min turnaround buffer).`,
         conflictingFlightId: overlap.id
       });
     }
@@ -509,7 +676,7 @@ router.put('/flights/:flightId', requireAuth, requireRoles('admin', 'super_admin
       if (overlap) {
         await client.query('ROLLBACK');
         return res.status(409).json({
-          message: `Aircraft would overlap flight ${overlap.flight_number}.`,
+          message: `Aircraft would conflict with flight ${overlap.flight_number} (includes ${MIN_TURNAROUND_MINUTES} min turnaround buffer).`,
           conflictingFlightId: overlap.id
         });
       }
@@ -572,6 +739,10 @@ router.patch('/flights/:flightId/status', requireAuth, requireRoles('admin', 'su
     }
     if (normalizeStatus(cur.rows[0].status) === 'CANCELLED') {
       return res.status(400).json({ message: 'Cannot change status of a cancelled flight.' });
+    }
+    const transition = validateOpsStatusTransition(cur.rows[0].status, next);
+    if (!transition.ok) {
+      return res.status(400).json({ message: transition.message });
     }
     const upd = await pool.query(
       `UPDATE flights SET status = $2 WHERE id = $1 RETURNING id, flight_number, status`,
@@ -688,7 +859,7 @@ router.post('/flights/:flightId/assign-aircraft', requireAuth, requireRoles('adm
     if (overlap) {
       await client.query('ROLLBACK');
       return res.status(409).json({
-        message: `Aircraft is already assigned to overlapping flight ${overlap.flight_number}.`,
+        message: `Aircraft conflicts with flight ${overlap.flight_number} (includes ${MIN_TURNAROUND_MINUTES} min turnaround buffer).`,
         conflictingFlightId: overlap.id
       });
     }
@@ -885,6 +1056,17 @@ router.post('/flights/:flightId/dispatch', requireAuth, requireRoles('admin', 's
       await client.query('ROLLBACK');
       return res.status(400).json({ message: 'Cannot dispatch a cancelled flight.' });
     }
+    if (status === 'CANCELLED') {
+      await client.query('ROLLBACK');
+      return res.status(400).json({
+        message: 'Use the cancel flight action with a required reason instead of setting status to CANCELLED here.'
+      });
+    }
+    const dispatchTransition = validateOpsStatusTransition(cur.rows[0].status, status);
+    if (!dispatchTransition.ok) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ message: dispatchTransition.message });
+    }
 
     const flightResult = await client.query(
       `UPDATE flights
@@ -930,15 +1112,19 @@ router.post('/flights/:flightId/dispatch', requireAuth, requireRoles('admin', 's
 
 router.post('/flights/:flightId/dispatch-release', requireAuth, requireRoles('admin', 'super_admin', 'operations'), async (req, res) => {
   const { flightId } = req.params;
-  const { remarks } = req.body;
+  const { remarks, checklist } = req.body;
   if (!isUuid(flightId)) {
     return res.status(400).json({ message: 'Invalid flight id.' });
+  }
+  const checklistResult = assertDispatchReleaseChecklist(req.body);
+  if (!checklistResult.ok) {
+    return res.status(400).json({ message: checklistResult.message });
   }
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
     const cur = await client.query(
-      `SELECT id, status, aircraft_id, route_id FROM flights WHERE id = $1`,
+      `SELECT id, status, aircraft_id, route_id, departure_airport, gate, departure_time FROM flights WHERE id = $1`,
       [flightId]
     );
     const row = cur.rows[0];
@@ -958,22 +1144,65 @@ router.post('/flights/:flightId/dispatch-release', requireAuth, requireRoles('ad
       await client.query('ROLLBACK');
       return res.status(400).json({ message: 'Flight must be linked to a route (route_id).' });
     }
+    const ac = await client.query(`SELECT release_status FROM aircraft WHERE id = $1`, [row.aircraft_id]);
+    if (!ac.rows[0] || String(ac.rows[0].release_status) !== 'RELEASED') {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ message: 'Aircraft must be maintenance-released before dispatch release.' });
+    }
+
+    const st = normalizeStatus(row.status);
+    let nextStatus = 'CHECKIN_OPEN';
+    if (['BOARDING', 'GATE_CLOSED', 'DEPARTED', 'IN_AIR', 'ARRIVED'].includes(st)) {
+      nextStatus = st;
+    }
+
     const upd = await client.query(
-      `UPDATE flights SET status = 'BOARDING' WHERE id = $1 RETURNING id, flight_number, status`,
-      [flightId]
+      `UPDATE flights SET status = $2::varchar WHERE id = $1 RETURNING id, flight_number, status`,
+      [flightId, nextStatus]
     );
-    await client.query(
-      `INSERT INTO dispatch_logs (flight_id, dispatch_status, remarks, dispatched_by)
-       VALUES ($1, $2, $3, $4)`,
-      [flightId, 'RELEASED', remarks || 'Dispatch release — boarding', req.user.userId]
-    );
+    const checklistJson = JSON.stringify(checklistResult.checklist);
+    try {
+      await client.query(
+        `INSERT INTO dispatch_logs (flight_id, dispatch_status, remarks, dispatched_by, checklist_json)
+         VALUES ($1, $2, $3, $4, $5::jsonb)`,
+        [
+          flightId,
+          'RELEASED',
+          remarks || 'Dispatch release — pre-departure checklist complete',
+          req.user.userId,
+          checklistJson
+        ]
+      );
+    } catch (e) {
+      if (e && e.code === '42703') {
+        await client.query(
+          `INSERT INTO dispatch_logs (flight_id, dispatch_status, remarks, dispatched_by)
+           VALUES ($1, $2, $3, $4)`,
+          [flightId, 'RELEASED', remarks || 'Dispatch release — pre-departure checklist complete', req.user.userId]
+        );
+      } else {
+        throw e;
+      }
+    }
     await client.query(
       `INSERT INTO audit_logs (user_id, action, entity, entity_id, metadata)
        VALUES ($1, $2, $3, $4, $5)`,
-      [req.user.userId, 'DISPATCH_RELEASE_BOARDING', 'flights', flightId, JSON.stringify({})]
+      [
+        req.user.userId,
+        'DISPATCH_RELEASE',
+        'flights',
+        flightId,
+        JSON.stringify({ checklist: checklistResult.checklist, nextStatus })
+      ]
     );
     await client.query('COMMIT');
-    return res.status(200).json({ flight: upd.rows[0], message: 'Flight released for boarding.' });
+    return res.status(200).json({
+      flight: upd.rows[0],
+      message:
+        nextStatus === 'CHECKIN_OPEN'
+          ? 'Dispatch release complete — check-in may open for this flight.'
+          : 'Dispatch release logged; flight already in advanced status.'
+    });
   } catch (error) {
     await client.query('ROLLBACK');
     return res.status(500).json({ message: 'Failed dispatch release.', error: error.message });
@@ -987,8 +1216,14 @@ router.post('/flights/:flightId/delays', requireAuth, requireRoles('admin', 'sup
   if (!isUuid(flightId)) {
     return res.status(400).json({ message: 'Invalid flight id.' });
   }
-  const { delayMinutes, reason } = req.body;
+  const { delayMinutes, reason, revisedDepartureTime, operationalNotes } = req.body;
   const minutes = Number(delayMinutes);
+  const notesTrim =
+    operationalNotes != null ? String(operationalNotes).trim().slice(0, 4000) : null;
+  const revisedIso =
+    revisedDepartureTime != null && String(revisedDepartureTime).trim()
+      ? new Date(String(revisedDepartureTime)).toISOString()
+      : null;
 
   if (!Number.isInteger(minutes) || minutes <= 0 || !reason || String(reason).trim().length < 3) {
     return res.status(400).json({ message: 'delayMinutes (positive integer) and reason (min 3 chars) are required.' });
@@ -998,7 +1233,10 @@ router.post('/flights/:flightId/delays', requireAuth, requireRoles('admin', 'sup
   try {
     await client.query('BEGIN');
 
-    const cur = await client.query(`SELECT status FROM flights WHERE id = $1`, [flightId]);
+    const cur = await client.query(
+      `SELECT id, status, departure_time, arrival_time FROM flights WHERE id = $1 FOR UPDATE`,
+      [flightId]
+    );
     if (!cur.rows[0]) {
       await client.query('ROLLBACK');
       return res.status(404).json({ message: 'Flight not found.' });
@@ -1008,21 +1246,57 @@ router.post('/flights/:flightId/delays', requireAuth, requireRoles('admin', 'sup
       return res.status(400).json({ message: 'Cannot delay a cancelled flight.' });
     }
 
+    let newDepIso = null;
+    let newArrIso = null;
+    if (revisedIso && !Number.isNaN(new Date(revisedIso).getTime())) {
+      const oldDep = new Date(cur.rows[0].departure_time);
+      const oldArr = new Date(cur.rows[0].arrival_time);
+      const newDep = new Date(revisedIso);
+      if (newDep > oldDep) {
+        const legMs = oldArr.getTime() - oldDep.getTime();
+        newDepIso = newDep.toISOString();
+        newArrIso = new Date(newDep.getTime() + legMs).toISOString();
+      }
+    }
+
     const flightResult = await client.query(
       `UPDATE flights
-       SET status = 'DELAYED'
+       SET status = 'DELAYED',
+           departure_time = COALESCE($2::timestamptz, departure_time),
+           arrival_time = COALESCE($3::timestamptz, arrival_time)
        WHERE id = $1
-       RETURNING id, flight_number, status`,
-      [flightId]
+       RETURNING id, flight_number, status, departure_time, arrival_time`,
+      [flightId, newDepIso, newArrIso]
     );
     const flight = flightResult.rows[0];
 
-    const delay = await client.query(
-      `INSERT INTO flight_delays (flight_id, delay_minutes, reason, reported_by)
-       VALUES ($1, $2, $3, $4)
-       RETURNING id, flight_id, delay_minutes, reason, created_at`,
-      [flightId, minutes, String(reason).trim().slice(0, 2000), req.user.userId]
-    );
+    let delay;
+    try {
+      delay = await client.query(
+        `INSERT INTO flight_delays (flight_id, delay_minutes, reason, reported_by, revised_departure, operational_notes)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         RETURNING id, flight_id, delay_minutes, reason, created_at, revised_departure, operational_notes`,
+        [
+          flightId,
+          minutes,
+          String(reason).trim().slice(0, 2000),
+          req.user.userId,
+          newDepIso,
+          notesTrim
+        ]
+      );
+    } catch (e) {
+      if (e && e.code === '42703') {
+        delay = await client.query(
+          `INSERT INTO flight_delays (flight_id, delay_minutes, reason, reported_by)
+           VALUES ($1, $2, $3, $4)
+           RETURNING id, flight_id, delay_minutes, reason, created_at`,
+          [flightId, minutes, String(reason).trim().slice(0, 2000), req.user.userId]
+        );
+      } else {
+        throw e;
+      }
+    }
 
     await client.query(
       `INSERT INTO audit_logs (user_id, action, entity, entity_id, metadata)
@@ -1032,7 +1306,12 @@ router.post('/flights/:flightId/delays', requireAuth, requireRoles('admin', 'sup
         'FLIGHT_DELAY_RECORDED',
         'flights',
         flightId,
-        JSON.stringify({ delayMinutes: minutes, reason })
+        JSON.stringify({
+          delayMinutes: minutes,
+          reason,
+          revisedDepartureTime: newDepIso,
+          operationalNotes: notesTrim
+        })
       ]
     );
 
@@ -1078,6 +1357,7 @@ router.get(
         f.aircraft_id,
         a.tail_number,
         a.model,
+        a.release_status AS aircraft_release_status,
         r.label AS route_label
       FROM flights f
       LEFT JOIN aircraft a ON a.id = f.aircraft_id
@@ -1099,27 +1379,228 @@ router.get(
         [flightId]
       );
 
-      const dispatchLogs = await pool.query(
-        `SELECT id, dispatch_status, remarks, dispatched_at
-       FROM dispatch_logs
-       WHERE flight_id = $1
-       ORDER BY dispatched_at DESC`,
+      let dispatchLogs;
+      try {
+        dispatchLogs = await pool.query(
+          `SELECT id, dispatch_status, remarks, dispatched_at, checklist_json
+           FROM dispatch_logs
+           WHERE flight_id = $1
+           ORDER BY dispatched_at DESC`,
+          [flightId]
+        );
+      } catch (e) {
+        if (e && e.code === '42703') {
+          dispatchLogs = await pool.query(
+            `SELECT id, dispatch_status, remarks, dispatched_at, NULL::jsonb AS checklist_json
+             FROM dispatch_logs
+             WHERE flight_id = $1
+             ORDER BY dispatched_at DESC`,
+            [flightId]
+          );
+        } else {
+          throw e;
+        }
+      }
+
+      let delays;
+      try {
+        delays = await pool.query(
+          `SELECT id, delay_minutes, reason, created_at, revised_departure, operational_notes
+           FROM flight_delays
+           WHERE flight_id = $1
+           ORDER BY created_at DESC`,
+          [flightId]
+        );
+      } catch (e) {
+        if (e && e.code === '42703') {
+          delays = await pool.query(
+            `SELECT id, delay_minutes, reason, created_at, NULL::timestamptz AS revised_departure, NULL::text AS operational_notes
+             FROM flight_delays
+             WHERE flight_id = $1
+             ORDER BY created_at DESC`,
+            [flightId]
+          );
+        } else {
+          throw e;
+        }
+      }
+
+      const loadRow = await pool.query(
+        `SELECT
+          (SELECT COUNT(DISTINCT bp.passenger_id)::int
+           FROM booking_flights bf
+           JOIN bookings b ON b.id = bf.booking_id AND UPPER(TRIM(COALESCE(b.booking_status,''))) <> 'CANCELLED'
+           JOIN booking_passengers bp ON bp.booking_id = b.id
+           WHERE bf.flight_id = f.id) AS passengers_booked,
+          (SELECT COUNT(*)::int FROM checkins c WHERE c.flight_id = f.id) AS passengers_checked_in,
+          (SELECT COUNT(*)::int FROM checkins c WHERE c.flight_id = f.id AND UPPER(TRIM(c.boarding_status)) = 'BOARDED') AS passengers_boarded,
+          (SELECT COALESCE(SUM(bag.pieces), 0)::int FROM baggage bag JOIN checkins c ON c.id = bag.checkin_id WHERE c.flight_id = f.id) AS baggage_pieces,
+          (SELECT COALESCE(SUM(bag.weight_kg), 0)::numeric FROM baggage bag JOIN checkins c ON c.id = bag.checkin_id WHERE c.flight_id = f.id) AS baggage_weight_kg
+        FROM flights f WHERE f.id = $1`,
+        [flightId]
+      );
+      const L = loadRow.rows[0] || {};
+      const booked = Number(L.passengers_booked || 0);
+      const checkedIn = Number(L.passengers_checked_in || 0);
+      const boarded = Number(L.passengers_boarded || 0);
+      const baggagePieces = Number(L.baggage_pieces || 0);
+      const baggageKg = Number(L.baggage_weight_kg || 0);
+      const cargoWeightKg = 0;
+      const estFuelKg = Math.round(4200 + booked * 95 + baggageKg * 1.2);
+
+      let gateConflict = null;
+      if (flight.gate) {
+        const g = await pool.query(
+          `SELECT f2.flight_number
+           FROM flights f2
+           WHERE f2.id <> $1::uuid
+             AND UPPER(TRIM(f2.departure_airport)) = UPPER(TRIM($2::text))
+             AND f2.gate IS NOT NULL AND btrim(f2.gate::text) <> ''
+             AND UPPER(btrim(f2.gate::text)) = UPPER(btrim($3::text))
+             AND (f2.departure_time AT TIME ZONE 'UTC')::date = ($4::timestamptz AT TIME ZONE 'UTC')::date
+             AND ${sqlFlightNotTerminal('f2')}
+           LIMIT 1`,
+          [flightId, flight.departure_airport, flight.gate, flight.departure_time]
+        );
+        gateConflict = g.rows[0]?.flight_number || null;
+      }
+
+      const auditTimeline = await pool.query(
+        `SELECT id, action, metadata, created_at
+         FROM audit_logs
+         WHERE entity = 'flights' AND entity_id = $1::uuid
+         ORDER BY created_at DESC
+         LIMIT 120`,
         [flightId]
       );
 
-      const delays = await pool.query(
-        `SELECT id, delay_minutes, reason, created_at
-       FROM flight_delays
-       WHERE flight_id = $1
-       ORDER BY created_at DESC`,
-        [flightId]
-      );
+      const roles = new Set(crew.rows.map((r) => String(r.duty_role || '').toUpperCase()));
+      const dutyCounts = {};
+      for (const r of crew.rows) {
+        const dr = String(r.duty_role || '').toUpperCase();
+        dutyCounts[dr] = (dutyCounts[dr] || 0) + 1;
+      }
+      const alerts = [];
+      if ((dutyCounts.PIC || 0) > 1) {
+        alerts.push({
+          code: 'CREW_DUPLICATE_PIC',
+          severity: 'error',
+          message: 'More than one Captain (PIC) line on the roster — correct assignments before release.'
+        });
+      }
+      if ((dutyCounts.FO || 0) > 1 || (dutyCounts.SIC || 0) > 1) {
+        alerts.push({
+          code: 'CREW_DUPLICATE_FO',
+          severity: 'warning',
+          message: 'Multiple First Officer (FO/SIC) lines — verify complement and duty rules.'
+        });
+      }
+      if (!flight.aircraft_id) {
+        alerts.push({ code: 'NO_AIRCRAFT', severity: 'error', message: 'No aircraft assigned to this flight.' });
+      } else if (String(flight.aircraft_release_status || '').toUpperCase() !== 'RELEASED') {
+        alerts.push({
+          code: 'MAINT_NOT_RELEASED',
+          severity: 'warning',
+          message: 'Aircraft is not maintenance-released for operations.'
+        });
+      }
+      if (!roles.has('PIC')) {
+        alerts.push({ code: 'NO_PIC', severity: 'warning', message: 'No Captain (PIC) assigned on crew roster.' });
+      }
+      if (!roles.has('FO') && !roles.has('SIC')) {
+        alerts.push({
+          code: 'NO_FO',
+          severity: 'info',
+          message: 'No First Officer (FO/SIC) recorded — verify dual-pilot rules.'
+        });
+      }
+      if (normalizeStatus(flight.status) === 'SCHEDULED') {
+        alerts.push({
+          code: 'CHECKIN_NOT_OPEN',
+          severity: 'info',
+          message:
+            'Flight is SCHEDULED — passenger check-in requires CHECKIN_OPEN, BOARDING, or DELAYED. Use Open ck-in or dispatch release.'
+        });
+      }
+      if (gateConflict) {
+        alerts.push({
+          code: 'GATE_CONFLICT',
+          severity: 'warning',
+          message: `Gate ${flight.gate} may conflict with flight ${gateConflict} same day.`
+        });
+      }
+      if (normalizeStatus(flight.status) === 'DELAYED' || Number(delays.rows[0]?.delay_minutes || 0) >= 45) {
+        alerts.push({
+          code: 'DELAY_RISK',
+          severity: 'info',
+          message: 'Delay risk / recovery — review revised times and connections.'
+        });
+      }
+
+      if (flight.aircraft_id) {
+        const prevLeg = await pool.query(
+          `SELECT flight_number, arrival_time
+           FROM flights f
+           WHERE f.aircraft_id = $1
+             AND f.id <> $2::uuid
+             AND f.arrival_time <= $3::timestamptz
+             AND ${sqlFlightNotTerminal('f')}
+           ORDER BY f.arrival_time DESC
+           LIMIT 1`,
+          [flight.aircraft_id, flightId, flight.departure_time]
+        );
+        if (prevLeg.rows[0]) {
+          const gapMin = (new Date(flight.departure_time) - new Date(prevLeg.rows[0].arrival_time)) / 60000;
+          if (gapMin < MIN_TURNAROUND_MINUTES) {
+            alerts.push({
+              code: 'TIGHT_TURNAROUND_IN',
+              severity: 'warning',
+              message: `After ${prevLeg.rows[0].flight_number}, only ${Math.round(gapMin)} min until this departure — target ≥ ${MIN_TURNAROUND_MINUTES} min turnaround.`
+            });
+          }
+        }
+        const nextLeg = await pool.query(
+          `SELECT flight_number, departure_time
+           FROM flights f
+           WHERE f.aircraft_id = $1
+             AND f.id <> $2::uuid
+             AND f.departure_time >= $3::timestamptz
+             AND ${sqlFlightNotTerminal('f')}
+           ORDER BY f.departure_time ASC
+           LIMIT 1`,
+          [flight.aircraft_id, flightId, flight.arrival_time]
+        );
+        if (nextLeg.rows[0]) {
+          const gapMin = (new Date(nextLeg.rows[0].departure_time) - new Date(flight.arrival_time)) / 60000;
+          if (gapMin < MIN_TURNAROUND_MINUTES) {
+            alerts.push({
+              code: 'TIGHT_TURNAROUND_OUT',
+              severity: 'warning',
+              message: `Before ${nextLeg.rows[0].flight_number}, only ${Math.round(gapMin)} min after this arrival — target ≥ ${MIN_TURNAROUND_MINUTES} min turnaround.`
+            });
+          }
+        }
+      }
 
       return res.status(200).json({
         flight,
         crew: crew.rows,
         dispatchLogs: dispatchLogs.rows,
-        delays: delays.rows
+        delays: delays.rows,
+        operationalSummary: {
+          load: {
+            passengersBooked: booked,
+            passengersCheckedIn: checkedIn,
+            passengersBoarded: boarded,
+            baggagePieces,
+            baggageWeightKg: Math.round(baggageKg * 100) / 100,
+            cargoWeightKg,
+            estimatedFuelKg: estFuelKg
+          },
+          alerts,
+          constants: { minTurnaroundMinutes: MIN_TURNAROUND_MINUTES }
+        },
+        auditTimeline: auditTimeline.rows
       });
     } catch (error) {
       return res.status(500).json({ message: 'Failed to retrieve flight operations details.', error: error.message });

@@ -110,6 +110,79 @@ async function main() {
     console.log('SKIP detail (no bookings — run db:fix)');
   }
 
+  const catRes = await fetch(`${base}/api/master-data/catalog/booking`, { headers: auth });
+  const catBody = await catRes.json().catch(() => ({}));
+  if (!catRes.ok || !Array.isArray(catBody.fareClasses)) {
+    console.error('FAIL GET /api/master-data/catalog/booking', catRes.status, catBody);
+    process.exit(1);
+  }
+  const econFc = catBody.fareClasses.find((x) => x.code === 'ECON');
+  if (!econFc?.id) {
+    console.error('FAIL catalog: no ECON fare class (run db:fix / master_data_seed)');
+    process.exit(1);
+  }
+  console.log('OK GET /api/master-data/catalog/booking', catBody.fareClasses.length, 'fare classes');
+
+  const searchRes2 = await fetch(`${base}/api/booking/flights/search?${search}`, { headers: auth });
+  const searchBody2 = await searchRes2.json().catch(() => ({}));
+  const outId = searchBody2.outboundFlights?.[0]?.id;
+  if (!outId) {
+    console.error('SKIP create booking (no outbound flight for pricing E2E)');
+  } else {
+    const prev = new URLSearchParams({
+      outboundFlightId: outId,
+      fareClassId: econFc.id,
+      tripType: 'ONE_WAY'
+    });
+    const priceRes = await fetch(`${base}/api/master-data/pricing-preview?${prev}`, { headers: auth });
+    const priceBody = await priceRes.json().catch(() => ({}));
+    if (!priceRes.ok || typeof priceBody.totalPerPax !== 'number') {
+      console.error('FAIL GET /api/master-data/pricing-preview', priceRes.status, priceBody);
+      process.exit(1);
+    }
+    console.log('OK GET /api/master-data/pricing-preview totalPerPax=', priceBody.totalPerPax, priceBody.currency);
+
+    const createRes = await fetch(`${base}/api/booking`, {
+      method: 'POST',
+      headers: { ...auth, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        tripType: 'ONE_WAY',
+        outboundFlightId: outId,
+        passengers: [
+          {
+            fullName: 'Verify Api Pax',
+            gender: 'MALE',
+            dateOfBirth: '1990-01-15',
+            nationality: 'Kenyan',
+            passportNo: 'PV999001',
+            passportExpiry: '2032-01-01',
+            phone: '+254700000001',
+            email: 'verify-api@hawana.aero',
+            emergencyContact: '+254711111112',
+            passengerType: 'ADT'
+          }
+        ],
+        fareClassId: econFc.id,
+        currency: priceBody.currency || 'USD',
+        pricedTotalPerPax: priceBody.totalPerPax,
+        pricedCurrency: priceBody.currency,
+        paymentType: 'CARD',
+        collectPayment: true,
+        departureDate: tomorrow
+      })
+    });
+    const createBody = await createRes.json().catch(() => ({}));
+    if (!createRes.ok || !createBody.booking?.pnr) {
+      console.error('FAIL POST /api/booking (E2E)', createRes.status, createBody);
+      process.exit(1);
+    }
+    if (!Array.isArray(createBody.tickets) || createBody.tickets.length < 1) {
+      console.error('FAIL POST /api/booking: expected auto-issued tickets', createBody);
+      process.exit(1);
+    }
+    console.log('OK POST /api/booking E2E PNR', createBody.booking.pnr, 'tickets', createBody.tickets.length);
+  }
+
   console.log('All booking API checks passed.');
 }
 

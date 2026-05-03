@@ -3,6 +3,7 @@ import { pool } from '../../config/db.js';
 import { requireAuth, requireRoles } from '../../middleware/auth.js';
 import { buildBoardingPassView } from '../../services/checkinBoardingService.js';
 import { isUuid, assertGateMatchesFlight, runBoardingScan } from '../../services/checkinBoardingWorkflow.js';
+import { isFlightOpenForBoardingOps } from '../../lib/flightOccStatus.js';
 
 const router = express.Router();
 
@@ -57,7 +58,7 @@ router.patch('/status', requireAuth, requireRoles(...ROLES), async (req, res) =>
   try {
     await client.query('BEGIN');
     const cur = await client.query(
-      `SELECT c.id, c.passenger_id, c.boarding_status, c.flight_id, b.pnr, f.gate
+      `SELECT c.id, c.passenger_id, c.boarding_status, c.flight_id, b.pnr, f.gate, f.status AS flight_status
        FROM checkins c
        JOIN bookings b ON b.id = c.booking_id
        JOIN flights f ON f.id = c.flight_id
@@ -68,6 +69,14 @@ router.patch('/status', requireAuth, requireRoles(...ROLES), async (req, res) =>
     if (!row) {
       await client.query('ROLLBACK');
       return res.status(404).json({ message: 'Check-in not found.' });
+    }
+
+    const flightSt = String(row.flight_status || '').toUpperCase();
+    if (!isFlightOpenForBoardingOps(row.flight_status)) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({
+        message: `Boarding updates are not allowed while flight status is ${flightSt}. Open check-in / boarding / gate in Operations first.`
+      });
     }
 
     if (gateAtScan) {

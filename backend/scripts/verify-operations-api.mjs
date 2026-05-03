@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /**
- * Verifies Flight & Operations APIs. Usage:
+ * Verifies Flight & Operations APIs (OCC dashboard, details, status rules, delays, dispatch checklist).
+ * Usage:
  *   BASE_URL=http://127.0.0.1:5000 node backend/scripts/verify-operations-api.mjs
  */
 const base = process.env.BASE_URL || 'http://127.0.0.1:5000';
@@ -19,17 +20,32 @@ async function main() {
     process.exit(1);
   }
   const token = loginBody.token;
-  const auth = { Authorization: `Bearer ${token}` };
+  const auth = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
 
   const today = new Date().toISOString().slice(0, 10);
 
-  const dash = await fetch(`${base}/api/operations/dashboard/today`, { headers: auth });
-  const dashBody = await dash.json().catch(() => ({}));
-  if (!dash.ok || !Array.isArray(dashBody.flights) || typeof dashBody.summaryByStatus !== 'object') {
-    console.error('FAIL /api/operations/dashboard/today', dash.status, dashBody);
+  const dashToday = await fetch(`${base}/api/operations/dashboard/today`, { headers: auth });
+  const dashTodayBody = await dashToday.json().catch(() => ({}));
+  if (!dashToday.ok || !Array.isArray(dashTodayBody.flights) || typeof dashTodayBody.summaryByStatus !== 'object') {
+    console.error('FAIL /api/operations/dashboard/today', dashToday.status, dashTodayBody);
     process.exit(1);
   }
-  console.log('OK /api/operations/dashboard/today', { date: dashBody.date, count: dashBody.flights.length });
+  console.log('OK /api/operations/dashboard/today', { date: dashTodayBody.date, count: dashTodayBody.flights.length });
+
+  const dashDate = await fetch(`${base}/api/operations/dashboard?date=${encodeURIComponent(today)}`, { headers: auth });
+  const dashDateBody = await dashDate.json().catch(() => ({}));
+  if (!dashDate.ok || !Array.isArray(dashDateBody.flights) || dashDateBody.date !== today) {
+    console.error('FAIL /api/operations/dashboard?date=', dashDate.status, dashDateBody);
+    process.exit(1);
+  }
+  console.log('OK /api/operations/dashboard?date=', { date: dashDateBody.date, count: dashDateBody.flights.length });
+
+  const badDate = await fetch(`${base}/api/operations/dashboard?date=not-a-date`, { headers: auth });
+  if (badDate.status !== 400) {
+    console.error('FAIL dashboard invalid date expected 400', badDate.status);
+    process.exit(1);
+  }
+  console.log('OK /api/operations/dashboard invalid date → 400');
 
   const routes = await fetch(`${base}/api/operations/routes`, { headers: auth });
   const routesBody = await routes.json().catch(() => ({}));
@@ -47,6 +63,15 @@ async function main() {
   }
   console.log('OK /api/operations/flights', schedBody.flights.length);
 
+  if (schedBody.flights.length !== dashDateBody.flights.length) {
+    console.error('FAIL dashboard vs flights list count mismatch', {
+      flights: schedBody.flights.length,
+      dashboard: dashDateBody.flights.length
+    });
+    process.exit(1);
+  }
+  console.log('OK dashboard and /flights counts match for', today);
+
   const ac = await fetch(`${base}/api/operations/aircraft`, { headers: auth });
   const acBody = await ac.json().catch(() => ({}));
   if (!ac.ok || !Array.isArray(acBody.aircraft)) {
@@ -63,9 +88,101 @@ async function main() {
       console.error('FAIL /api/operations/flights/:id/details', det.status, detBody);
       process.exit(1);
     }
-    console.log('OK /api/operations/flights/:id/details', { flight: detBody.flight.flight_number, crew: detBody.crew.length });
+    if (!detBody.operationalSummary || typeof detBody.operationalSummary.load !== 'object') {
+      console.error('FAIL details missing operationalSummary.load', detBody);
+      process.exit(1);
+    }
+    if (!Array.isArray(detBody.operationalSummary.alerts)) {
+      console.error('FAIL details missing operationalSummary.alerts', detBody);
+      process.exit(1);
+    }
+    if (!detBody.operationalSummary.constants || typeof detBody.operationalSummary.constants.minTurnaroundMinutes !== 'number') {
+      console.error('FAIL details missing operationalSummary.constants.minTurnaroundMinutes', detBody);
+      process.exit(1);
+    }
+    if (!Array.isArray(detBody.auditTimeline)) {
+      console.error('FAIL details missing auditTimeline', detBody);
+      process.exit(1);
+    }
+    console.log('OK /api/operations/flights/:id/details', {
+      flight: detBody.flight.flight_number,
+      crew: detBody.crew.length,
+      alerts: detBody.operationalSummary.alerts.length
+    });
+
+    const fullChecklist = {
+      aircraftRelease: true,
+      crewRelease: true,
+      weatherOk: true,
+      notamOk: true,
+      captainApproval: true,
+      dispatcherApproval: true
+    };
+
+    const relBad = await fetch(`${base}/api/operations/flights/${fid}/dispatch-release`, {
+      method: 'POST',
+      headers: auth,
+      body: JSON.stringify({ remarks: 'test', checklist: { ...fullChecklist, aircraftRelease: false } })
+    });
+    if (relBad.status !== 400) {
+      console.error('FAIL dispatch-release incomplete checklist expected 400', relBad.status, await relBad.text());
+      process.exit(1);
+    }
+    console.log('OK POST dispatch-release rejects incomplete checklist');
+
+    const patchCancel = await fetch(`${base}/api/operations/flights/${fid}/status`, {
+      method: 'PATCH',
+      headers: auth,
+      body: JSON.stringify({ status: 'CANCELLED' })
+    });
+    if (patchCancel.status !== 400) {
+      console.error('FAIL PATCH status to CANCELLED should be blocked', patchCancel.status, await patchCancel.text());
+      process.exit(1);
+    }
+    console.log('OK PATCH status cannot set CANCELLED without cancel endpoint');
+
+    const delayBody = {
+      delayMinutes: 15,
+      reason: 'ATC flow verification',
+      operationalNotes: 'verify-operations-api.mjs'
+    };
+    const delayRes = await fetch(`${base}/api/operations/flights/${fid}/delays`, {
+      method: 'POST',
+      headers: auth,
+      body: JSON.stringify(delayBody)
+    });
+    const delayJson = await delayRes.json().catch(() => ({}));
+    if (!delayRes.ok) {
+      console.error('FAIL POST delays', delayRes.status, delayJson);
+      process.exit(1);
+    }
+    console.log('OK POST delays', { status: delayJson.flight?.status });
+
+    if (delayJson.flight?.status === 'DELAYED') {
+      const patchRevert = await fetch(`${base}/api/operations/flights/${fid}/status`, {
+        method: 'PATCH',
+        headers: auth,
+        body: JSON.stringify({ status: 'SCHEDULED' })
+      });
+      if (!patchRevert.ok) {
+        console.error('FAIL PATCH DELAYED→SCHEDULED recovery', patchRevert.status, await patchRevert.text());
+        process.exit(1);
+      }
+      console.log('OK PATCH status DELAYED→SCHEDULED recovery');
+    }
+
+    const badTransition = await fetch(`${base}/api/operations/flights/${fid}/status`, {
+      method: 'PATCH',
+      headers: auth,
+      body: JSON.stringify({ status: 'IN_AIR' })
+    });
+    if (badTransition.status !== 400) {
+      console.error('FAIL PATCH SCHEDULED→IN_AIR should be rejected', badTransition.status, await badTransition.text());
+      process.exit(1);
+    }
+    console.log('OK PATCH rejects invalid transition to IN_AIR');
   } else {
-    console.log('SKIP details (no flights for UTC today — run npm run db:fix)');
+    console.log('SKIP deep checks (no flights for UTC today — run npm run db:fix)');
   }
 
   console.log('All operations API checks passed.');

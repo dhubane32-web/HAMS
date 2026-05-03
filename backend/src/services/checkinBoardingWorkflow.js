@@ -2,6 +2,8 @@
  * Shared check-in / boarding validation and scan logic.
  */
 
+import { isFlightOpenForBoardingOps } from '../lib/flightOccStatus.js';
+
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -77,7 +79,7 @@ export async function runBoardingScan(client, { scan, flightId, gateAtScan, stri
       return { ok: false, status: 400, message: 'PNR scan requires flightId in the request body.' };
     }
     const q = await client.query(
-      `SELECT c.id, c.boarding_status, c.passenger_id, f.gate
+      `SELECT c.id, c.boarding_status, c.passenger_id, c.flight_id, f.gate
        FROM checkins c
        JOIN bookings b ON b.id = c.booking_id
        JOIN flights f ON f.id = c.flight_id
@@ -105,6 +107,19 @@ export async function runBoardingScan(client, { scan, flightId, gateAtScan, stri
 
   if (!checkinRow) {
     return { ok: false, status: 404, message: 'No matching checked-in record for boarding.' };
+  }
+
+  const fid = checkinRow.flight_id;
+  if (fid) {
+    const fsq = await client.query(`SELECT status FROM flights WHERE id = $1`, [fid]);
+    const fs = String(fsq.rows[0]?.status || '').toUpperCase();
+    if (!isFlightOpenForBoardingOps(fsq.rows[0]?.status)) {
+      return {
+        ok: false,
+        status: 400,
+        message: `Boarding scan is not allowed while flight status is ${fs}. Open check-in / boarding / gate first.`
+      };
+    }
   }
 
   const gv = assertGateMatchesFlight(flightGate, gateAtScan, { strict: Boolean(strictGate) });

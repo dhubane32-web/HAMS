@@ -9,6 +9,7 @@ import {
   buildBoardingPassView
 } from '../../services/checkinBoardingService.js';
 import { assertGateMatchesFlight, runBoardingScan } from '../../services/checkinBoardingWorkflow.js';
+import { isFlightOpenForPassengerCheckin } from '../../lib/flightOccStatus.js';
 
 const router = express.Router();
 
@@ -980,11 +981,13 @@ async function processCheckIn(req, res) {
       return res.status(404).json({ message: 'Flight not found.' });
     }
     const fs = String(flightStatusRow.rows[0].status || '').toUpperCase();
-    const blockedFlight = new Set(['CANCELLED', 'DEPARTED', 'IN_AIR', 'LANDED']);
-    if (blockedFlight.has(fs)) {
+    const relaxScheduled = String(process.env.OCC_RELAX_CHECKIN_STATUSES || '').toLowerCase() === 'true';
+    if (!isFlightOpenForPassengerCheckin(fs, { relaxScheduled })) {
       await client.query('ROLLBACK');
       return res.status(400).json({
-        message: `Flight status validation failed: flight is ${fs}; check-in is not allowed.`
+        message: relaxScheduled
+          ? `Flight status validation failed: flight is ${fs}; check-in is not allowed.`
+          : `Check-in requires flight status CHECKIN_OPEN, BOARDING, or DELAYED (current: ${fs}). In Flight & Operations use Open ck-in or dispatch release. Optional: OCC_RELAX_CHECKIN_STATUSES=true also allows SCHEDULED.`
       });
     }
 
