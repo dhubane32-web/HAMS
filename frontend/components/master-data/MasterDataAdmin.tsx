@@ -1,6 +1,6 @@
 'use client';
 
-import { FormEvent, useCallback, useEffect, useState, type ReactNode } from 'react';
+import { FormEvent, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import toast from 'react-hot-toast';
 import { getPublicApiBaseUrl } from '@/lib/api-base';
 
@@ -493,6 +493,33 @@ function AirportsPanel({
   );
 }
 
+function mdAirportOptionLabel(a: Row) {
+  const code = String(a.iata_code ?? '');
+  const name = String(a.name ?? '').trim();
+  const inactive = a.is_active === false;
+  return `${code}${name ? ` — ${name}` : ''}${inactive ? ' (inactive)' : ''}`;
+}
+
+function sortAirportsForSelect(list: Row[]) {
+  return [...list].sort((a, b) => {
+    const ao = a.is_active === false ? 1 : 0;
+    const bo = b.is_active === false ? 1 : 0;
+    if (ao !== bo) return ao - bo;
+    return String(a.iata_code).localeCompare(String(b.iata_code));
+  });
+}
+
+function sortRoutesForSelect(list: Row[]) {
+  return [...list].sort((a, b) => {
+    const ai = a.is_active === false ? 1 : 0;
+    const bi = b.is_active === false ? 1 : 0;
+    if (ai !== bi) return ai - bi;
+    const o = String(a.origin_iata).localeCompare(String(b.origin_iata));
+    if (o !== 0) return o;
+    return String(a.dest_iata).localeCompare(String(b.dest_iata));
+  });
+}
+
 function RoutesPanel({
   rows,
   airports,
@@ -504,60 +531,208 @@ function RoutesPanel({
   onRefresh: () => void;
   onDelete: (id: string) => void;
 }) {
+  const airportsSorted = useMemo(() => sortAirportsForSelect(airports), [airports]);
+
   const [origin_airport_id, setO] = useState('');
   const [dest_airport_id, setD] = useState('');
   const [distance_nm, setDist] = useState('');
-  async function submit(e: FormEvent) {
+  const [is_active_create, setActiveCreate] = useState(true);
+
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editOrigin, setEditOrigin] = useState('');
+  const [editDest, setEditDest] = useState('');
+  const [editDist, setEditDist] = useState('');
+  const [editActive, setEditActive] = useState(true);
+
+  function resetCreateForm() {
+    setO('');
+    setD('');
+    setDist('');
+    setActiveCreate(true);
+  }
+
+  async function submitCreate(e: FormEvent) {
     e.preventDefault();
+    if (!origin_airport_id || !dest_airport_id) {
+      toast.error('Select origin and destination airports.');
+      return;
+    }
     const r = await mdFetch('/routes', {
       method: 'POST',
       body: JSON.stringify({
         origin_airport_id,
         dest_airport_id,
-        distance_nm: distance_nm ? Number(distance_nm) : null
+        distance_nm: distance_nm ? Number(distance_nm) : null,
+        is_active: is_active_create
       })
     });
-    const j = await r.json();
+    const j = (await r.json()) as { message?: string };
     if (!r.ok) return toast.error(j.message || 'Failed');
-    toast.success('Route created');
+    toast.success('Route saved');
+    resetCreateForm();
     onRefresh();
   }
+
+  function startEdit(route: Row) {
+    setEditingId(String(route.id));
+    setEditOrigin(String(route.origin_airport_id ?? ''));
+    setEditDest(String(route.dest_airport_id ?? ''));
+    setEditDist(route.distance_nm != null && route.distance_nm !== '' ? String(route.distance_nm) : '');
+    setEditActive(route.is_active !== false);
+  }
+
+  function cancelEdit() {
+    setEditingId(null);
+  }
+
+  async function submitEdit(e: FormEvent) {
+    e.preventDefault();
+    if (!editingId) return;
+    if (!editOrigin || !editDest) {
+      toast.error('Select origin and destination airports.');
+      return;
+    }
+    const r = await mdFetch(`/routes/${editingId}`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        origin_airport_id: editOrigin,
+        dest_airport_id: editDest,
+        distance_nm: editDist === '' ? null : Number(editDist),
+        is_active: editActive
+      })
+    });
+    const j = (await r.json()) as { message?: string };
+    if (!r.ok) return toast.error(j.message || 'Update failed');
+    toast.success('Route updated');
+    cancelEdit();
+    onRefresh();
+  }
+
   return (
     <div>
-      <h2>Routes (origin → destination airports)</h2>
+      <h2>Routes</h2>
+      <p style={{ margin: 0, color: '#64748b', fontSize: '0.88rem' }}>
+        Create or edit origin–destination pairs. Inactive routes stay in the catalog but are excluded from pricing and from
+        the Route fares “Route” dropdown by default (inactive routes appear at the end with a label).
+      </p>
+
+      <h3 style={{ fontSize: '0.95rem', marginTop: '1rem' }}>New route</h3>
       {formGrid(
-        submit,
+        submitCreate,
         <>
           <select value={origin_airport_id} onChange={(e) => setO(e.target.value)} required>
             <option value="">Origin airport</option>
-            {airports.map((a) => (
+            {airportsSorted.map((a) => (
               <option key={String(a.id)} value={String(a.id)}>
-                {String(a.iata_code)}
+                {mdAirportOptionLabel(a)}
               </option>
             ))}
           </select>
           <select value={dest_airport_id} onChange={(e) => setD(e.target.value)} required>
             <option value="">Destination airport</option>
-            {airports.map((a) => (
+            {airportsSorted.map((a) => (
               <option key={String(a.id)} value={String(a.id)}>
-                {String(a.iata_code)}
+                {mdAirportOptionLabel(a)}
               </option>
             ))}
           </select>
-          <input value={distance_nm} onChange={(e) => setDist(e.target.value)} placeholder="Distance nm" type="number" />
+          <input value={distance_nm} onChange={(e) => setDist(e.target.value)} placeholder="Distance (nm, optional)" type="number" min={0} />
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.85rem' }}>
+            <input type="checkbox" checked={is_active_create} onChange={(e) => setActiveCreate(e.target.checked)} />
+            Active
+          </label>
         </>
       )}
-      <ul style={{ margin: '0.75rem 0 0', padding: 0, listStyle: 'none', fontSize: '0.85rem' }}>
-        {rows.map((r) => (
-          <li key={String(r.id)} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, padding: '4px 0' }}>
-            <span>
-              {String(r.origin_iata)} → {String(r.dest_iata)}
-            </span>
-            <button type="button" className="secondary" onClick={() => onDelete(String(r.id))}>
-              Delete
-            </button>
-          </li>
-        ))}
+
+      <h3 style={{ fontSize: '0.95rem', marginTop: '1.25rem' }}>Existing routes</h3>
+      <ul style={{ margin: '0.5rem 0 0', padding: 0, listStyle: 'none', fontSize: '0.85rem' }}>
+        {rows.map((route) => {
+          const id = String(route.id);
+          const active = route.is_active !== false;
+          const isEditing = editingId === id;
+          return (
+            <li
+              key={id}
+              style={{
+                border: '1px solid #e2e8f0',
+                borderRadius: 8,
+                padding: '0.65rem 0.75rem',
+                marginBottom: 8,
+                background: isEditing ? '#f8fafc' : '#fff'
+              }}
+            >
+              {!isEditing ? (
+                <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                  <span>
+                    <strong>
+                      {String(route.origin_iata)} → {String(route.dest_iata)}
+                    </strong>
+                    {route.distance_nm != null && route.distance_nm !== '' ? (
+                      <span style={{ color: '#64748b', marginLeft: 8 }}>{String(route.distance_nm)} nm</span>
+                    ) : null}
+                    <span
+                      style={{
+                        marginLeft: 8,
+                        fontSize: '0.72rem',
+                        fontWeight: 600,
+                        padding: '2px 6px',
+                        borderRadius: 4,
+                        background: active ? '#dcfce7' : '#fee2e2',
+                        color: active ? '#166534' : '#991b1b'
+                      }}
+                    >
+                      {active ? 'Active' : 'Inactive'}
+                    </span>
+                  </span>
+                  <span style={{ display: 'flex', gap: 6 }}>
+                    <button type="button" className="secondary" onClick={() => startEdit(route)}>
+                      Edit
+                    </button>
+                    <button type="button" className="secondary" onClick={() => onDelete(id)}>
+                      Delete
+                    </button>
+                  </span>
+                </div>
+              ) : (
+                <form onSubmit={submitEdit} className="module-form-grid" style={{ gap: '0.5rem' }}>
+                  <select value={editOrigin} onChange={(e) => setEditOrigin(e.target.value)} required>
+                    <option value="">Origin airport</option>
+                    {airportsSorted.map((a) => (
+                      <option key={String(a.id)} value={String(a.id)}>
+                        {mdAirportOptionLabel(a)}
+                      </option>
+                    ))}
+                  </select>
+                  <select value={editDest} onChange={(e) => setEditDest(e.target.value)} required>
+                    <option value="">Destination airport</option>
+                    {airportsSorted.map((a) => (
+                      <option key={String(a.id)} value={String(a.id)}>
+                        {mdAirportOptionLabel(a)}
+                      </option>
+                    ))}
+                  </select>
+                  <input
+                    value={editDist}
+                    onChange={(e) => setEditDist(e.target.value)}
+                    placeholder="Distance (nm, optional)"
+                    type="number"
+                    min={0}
+                  />
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.85rem' }}>
+                    <input type="checkbox" checked={editActive} onChange={(e) => setEditActive(e.target.checked)} />
+                    Active
+                  </label>
+                  <span style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    <button type="submit">Save route</button>
+                    <button type="button" className="secondary" onClick={cancelEdit}>
+                      Cancel
+                    </button>
+                  </span>
+                </form>
+              )}
+            </li>
+          );
+        })}
       </ul>
     </div>
   );
@@ -799,34 +974,54 @@ function RouteFaresPanel({
   onRefresh: () => void;
   onDelete: (id: string) => void;
 }) {
+  const routesForDropdown = useMemo(() => sortRoutesForSelect(routes), [routes]);
+
   const [route_id, setR] = useState('');
   const [fare_class_id, setF] = useState('');
   const [amount, setAmt] = useState('');
   const [cur, setCur] = useState('USD');
+  const [rf_active, setRfActive] = useState(true);
   async function submit(e: FormEvent) {
     e.preventDefault();
     const r = await mdFetch('/route-fares', {
       method: 'POST',
-      body: JSON.stringify({ route_id, fare_class_id, amount: Number(amount), currency: cur })
+      body: JSON.stringify({
+        route_id,
+        fare_class_id,
+        amount: Number(amount),
+        currency: cur,
+        is_active: rf_active
+      })
     });
     const j = await r.json();
     if (!r.ok) return toast.error(j.message || 'Failed');
     toast.success('Route fare created');
+    setR('');
+    setF('');
+    setAmt('');
+    setRfActive(true);
     onRefresh();
   }
   return (
     <div>
       <h2>Route fares</h2>
+      <p style={{ margin: 0, color: '#64748b', fontSize: '0.88rem' }}>
+        Active routes are listed first. Use the Routes tab to add sectors such as MGQ → GGR; they appear here automatically.
+      </p>
       {formGrid(
         submit,
         <>
           <select value={route_id} onChange={(e) => setR(e.target.value)} required>
             <option value="">Route</option>
-            {routes.map((x) => (
-              <option key={String(x.id)} value={String(x.id)}>
-                {String(x.origin_iata)}→{String(x.dest_iata)}
-              </option>
-            ))}
+            {routesForDropdown.map((x) => {
+              const off = x.is_active === false;
+              return (
+                <option key={String(x.id)} value={String(x.id)}>
+                  {String(x.origin_iata)}→{String(x.dest_iata)}
+                  {off ? ' (inactive route)' : ''}
+                </option>
+              );
+            })}
           </select>
           <select value={fare_class_id} onChange={(e) => setF(e.target.value)} required>
             <option value="">Fare class</option>
@@ -845,6 +1040,10 @@ function RouteFaresPanel({
             ))}
             {!currencies.length && <option value="USD">USD</option>}
           </select>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.85rem' }}>
+            <input type="checkbox" checked={rf_active} onChange={(e) => setRfActive(e.target.checked)} />
+            Fare active
+          </label>
         </>
       )}
       <ul style={{ margin: '0.75rem 0 0', padding: 0, listStyle: 'none', fontSize: '0.85rem' }}>
@@ -852,6 +1051,7 @@ function RouteFaresPanel({
           <li key={String(r.id)} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, padding: '4px 0' }}>
             <span>
               {String(r.route_label)} {String(r.fare_class_code)} {String(r.amount)} {String(r.currency)}
+              {r.is_active === false ? <span style={{ color: '#991b1b' }}> (inactive)</span> : null}
             </span>
             <button type="button" className="secondary" onClick={() => onDelete(String(r.id))}>
               Delete

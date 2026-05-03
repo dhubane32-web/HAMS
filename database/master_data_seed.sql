@@ -32,6 +32,11 @@ SELECT 'JIB', 'Djibouti–Ambouli International', c.id, 'Africa/Djibouti'
 FROM md_countries c WHERE c.iso2 = 'DJ'
 ON CONFLICT (iata_code) DO NOTHING;
 
+INSERT INTO md_airports (iata_code, name, country_id, timezone)
+SELECT 'GGR', 'Garowe International', c.id, 'Africa/Mogadishu'
+FROM md_countries c WHERE c.iso2 = 'SO'
+ON CONFLICT (iata_code) DO NOTHING;
+
 INSERT INTO md_aircraft_types (code, name, default_seat_capacity)
 VALUES ('B738', 'Boeing 737-800', 162), ('A320', 'Airbus A320', 150)
 ON CONFLICT (code) DO NOTHING;
@@ -85,6 +90,15 @@ AND NOT EXISTS (
   WHERE r.origin_airport_id = o.id AND r.dest_airport_id = d.id
 );
 
+INSERT INTO md_routes (origin_airport_id, dest_airport_id, distance_nm, is_active)
+SELECT o.id, d.id, 430, TRUE
+FROM md_airports o, md_airports d
+WHERE o.iata_code = 'MGQ' AND d.iata_code = 'GGR'
+AND NOT EXISTS (
+  SELECT 1 FROM md_routes r
+  WHERE r.origin_airport_id = o.id AND r.dest_airport_id = d.id
+);
+
 -- Base fares per sector and fare class (USD). Taxes/fees applied in computeItineraryPricing.
 INSERT INTO md_route_fares (route_id, fare_class_id, amount, currency)
 SELECT r.id, f.id, v.amount, 'USD'
@@ -103,7 +117,10 @@ JOIN (VALUES
   ('MGQ', 'JIB', 'BUS', 495.00),
   ('JIB', 'MGQ', 'ECON', 195.00),
   ('JIB', 'MGQ', 'FLEX', 255.00),
-  ('JIB', 'MGQ', 'BUS', 495.00)
+  ('JIB', 'MGQ', 'BUS', 495.00),
+  ('MGQ', 'GGR', 'ECON', 125.00),
+  ('MGQ', 'GGR', 'FLEX', 165.00),
+  ('MGQ', 'GGR', 'BUS', 310.00)
 ) AS v(orig, dest, fc, amount)
   ON o.iata_code = v.orig AND d.iata_code = v.dest
 JOIN md_fare_classes f ON f.code = v.fc
@@ -133,7 +150,7 @@ SELECT r.id, NULL, 1, 23, 32, 12.00, 'USD'
 FROM md_routes r
 JOIN md_airports o ON o.id = r.origin_airport_id
 JOIN md_airports d ON d.id = r.dest_airport_id
-WHERE (o.iata_code, d.iata_code) IN (('DXB','NBO'),('NBO','DXB'),('MGQ','JIB'),('JIB','MGQ'))
+WHERE (o.iata_code, d.iata_code) IN (('DXB','NBO'),('NBO','DXB'),('MGQ','JIB'),('JIB','MGQ'),('MGQ','GGR'))
 AND NOT EXISTS (SELECT 1 FROM md_baggage_rules b WHERE b.route_id = r.id AND b.fare_class_id IS NULL);
 
 INSERT INTO md_departments (code, name)

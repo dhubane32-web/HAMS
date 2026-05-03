@@ -53,6 +53,14 @@ SELECT mr.id, fc.id,
         WHEN 'BUS' THEN 495.00
         ELSE 195.00
       END
+    WHEN (upper(o.iata_code) = 'MGQ' AND upper(d.iata_code) = 'GGR')
+      OR (upper(o.iata_code) = 'GGR' AND upper(d.iata_code) = 'MGQ') THEN
+      CASE fc.code
+        WHEN 'ECON' THEN 125.00
+        WHEN 'FLEX' THEN 165.00
+        WHEN 'BUS' THEN 310.00
+        ELSE 125.00
+      END
     ELSE
       CASE fc.code
         WHEN 'ECON' THEN 200.00

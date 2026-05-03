@@ -309,15 +309,21 @@ router.post('/routes', ...writeAdmin, async (req, res) => {
     const r = await pool.query(
       `INSERT INTO md_routes (origin_airport_id, dest_airport_id, distance_nm, is_active)
        VALUES ($1, $2, $3, $4) RETURNING *`,
-      [origin_airport_id, dest_airport_id, distance_nm ?? null, is_active]
+      [origin_airport_id, dest_airport_id, distance_nm ?? null, is_active !== false]
     );
     res.status(201).json(r.rows[0]);
   } catch (e) {
+    if (e && e.code === '23505') {
+      return res.status(409).json({ message: 'A route between these airports already exists.' });
+    }
     res.status(500).json({ message: e.message });
   }
 });
 router.put('/routes/:id', ...writeAdmin, async (req, res) => {
   const { origin_airport_id, dest_airport_id, distance_nm, is_active } = req.body;
+  if (origin_airport_id && dest_airport_id && origin_airport_id === dest_airport_id) {
+    return res.status(400).json({ message: 'Origin and destination must differ.' });
+  }
   try {
     const r = await pool.query(
       `UPDATE md_routes SET
@@ -331,6 +337,9 @@ router.put('/routes/:id', ...writeAdmin, async (req, res) => {
     if (!r.rows[0]) return res.status(404).json({ message: 'Not found.' });
     res.json(r.rows[0]);
   } catch (e) {
+    if (e && e.code === '23505') {
+      return res.status(409).json({ message: 'A route between these airports already exists.' });
+    }
     res.status(500).json({ message: e.message });
   }
 });
