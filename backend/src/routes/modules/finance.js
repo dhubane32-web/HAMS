@@ -37,7 +37,7 @@ router.get('/health', (_req, res) => {
   res.json({ module: 'finance', status: 'ready' });
 });
 
-/** Summary cards: finance leadership and admin (desk agents use booking module, not finance dashboard). */
+/** Summary cards + airline-style KPI pack (MTD cash, margin, agent exposure). */
 router.get('/dashboard', requireAuth, requireRoles(...ROLES_FINANCE_ORG), async (req, res) => {
   const role = req.user.role;
   const today = new Date().toISOString().slice(0, 10);
@@ -87,6 +87,39 @@ router.get('/dashboard', requireAuth, requireRoles(...ROLES_FINANCE_ORG), async 
              WHERE incurred_on >= $1::date AND incurred_on < ($1::date + INTERVAL '1 month')`,
             [monthStart]
           )
+        : Promise.resolve({ rows: [{ v: 0 }] }),
+      pool.query(
+        `SELECT COALESCE(SUM(p.amount - COALESCE(rf.refunded, 0)), 0)::numeric AS v
+         FROM payments p
+         JOIN bookings b ON b.id = p.booking_id
+         LEFT JOIN (SELECT payment_id, SUM(refund_amount)::numeric AS refunded FROM refunds GROUP BY payment_id) rf ON rf.payment_id = p.id
+         WHERE p.processed_at >= $1::timestamptz AND p.processed_at < ($1::date + INTERVAL '1 month')::timestamptz
+           AND UPPER(TRIM(p.payment_status)) IN ('PAID', 'SUCCESS', 'PARTIALLY_REFUNDED', 'REFUNDED')`,
+        [monthStart]
+      ),
+      pool.query(
+        `SELECT COALESCE(SUM(r.refund_amount), 0)::numeric AS v
+         FROM refunds r
+         WHERE r.refunded_at >= $1::timestamptz AND r.refunded_at < ($1::date + INTERVAL '1 month')::timestamptz`,
+        [monthStart]
+      ),
+      canViewAllFinance(role)
+        ? pool.query(
+            `SELECT COALESCE(SUM(b.total_amount), 0)::numeric AS v
+             FROM bookings b
+             JOIN users u ON u.id = b.created_by
+             WHERE UPPER(TRIM(b.booking_status)) <> 'CANCELLED'
+               AND UPPER(TRIM(b.payment_status)) IN ('UNPAID', 'PARTIALLY_PAID')
+               AND u.role::text IN ('agent', 'booking_agent')`,
+            []
+          )
+        : Promise.resolve({ rows: [{ v: 0 }] }),
+      canViewAllFinance(role)
+        ? pool.query(
+            `SELECT COALESCE(SUM(amount), 0)::numeric AS v FROM finance_vendor_invoices
+             WHERE status IN ('OPEN', 'PARTIAL')`,
+            []
+          ).catch(() => ({ rows: [{ v: 0 }] }))
         : Promise.resolve({ rows: [{ v: 0 }] })
     ]);
 
@@ -117,18 +150,39 @@ router.get('/dashboard', requireAuth, requireRoles(...ROLES_FINANCE_ORG), async 
     const pendingRefunds = rowCount(3);
     const ticketMonth = rowV(4);
     const expensesMonth = rowV(5);
+    const revenueMtd = rowV(6);
+    const refundsMtd = rowV(7);
+    const agentOutstanding = rowV(8);
+    const apOpen = rowV(9);
+
+    const revenueToday = payToday - refToday;
+    const netCashMtd = revenueMtd - refundsMtd - expensesMonth;
+    const grossMarginPct = revenueMtd > 0 ? (revenueMtd - expensesMonth) / revenueMtd : null;
 
     return res.status(200).json({
       asOf: today,
       scope: 'organization',
       cards: {
-        netPaymentsToday: payToday - refToday,
+        netPaymentsToday: revenueToday,
         refundsToday: refToday,
         outstandingBookings: out.c,
         outstandingGrossAmount: out.gross,
         pendingRefundRequests: pendingRefunds,
         ticketLinkedFareMonth: ticketMonth,
         expensesMonth
+      },
+      kpis: {
+        revenueToday,
+        revenueMTD: revenueMtd,
+        refundsToday: refToday,
+        refundsMTD: refundsMtd,
+        outstandingBookings: out.c,
+        outstandingBookingsAmount: out.gross,
+        outstandingAgentBalances: agentOutstanding,
+        expensesMTD: expensesMonth,
+        accountsPayableOpen: apOpen,
+        netCashMTD: netCashMtd,
+        grossMarginPct
       }
     });
   } catch (error) {
@@ -399,7 +453,7 @@ router.get('/refund-requests', requireAuth, requireRoles(...ROLES_REFUND_QUEUE),
     }
     const where = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
     const r = await pool.query(
-      `SELECT rr.*, p.booking_id, b.pnr, rq_user.full_name AS requested_by_name
+      `SELECT rr.*, p.booking_id, p.payment_status AS payment_status, b.pnr, rq_user.full_name AS requested_by_name
        FROM refund_requests rr
        JOIN payments p ON p.id = rr.payment_id
        JOIN bookings b ON b.id = p.booking_id
@@ -807,10 +861,23 @@ router.get('/reports/ticket-revenue', requireAuth, requireRoles(...ROLES_FINANCE
 router.get('/reports/flight-profitability', requireAuth, requireRoles(...ROLES_FINANCE_ORG), async (req, res) => {
   const from = String(req.query.from || new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10));
   const to = String(req.query.to || new Date().toISOString().slice(0, 10));
+  const flightId = req.query.flightId ? String(req.query.flightId) : null;
+  const routeLike = req.query.route ? String(req.query.route).trim() : null;
 
   try {
+    const vals = [from, to];
+    let extra = '';
+    if (flightId && /^[0-9a-f-]{36}$/i.test(flightId)) {
+      vals.push(flightId);
+      extra = `AND f.id = $${vals.length}::uuid`;
+    } else if (routeLike && routeLike.length >= 3) {
+      vals.push(`%${routeLike.replace(/%/g, '')}%`);
+      extra = `AND (f.flight_number ILIKE $${vals.length} OR (f.departure_airport || f.arrival_airport) ILIKE $${vals.length})`;
+    }
+
     const r = await pool.query(
       `SELECT f.id AS flight_id, f.flight_number, f.departure_airport, f.arrival_airport, f.departure_time,
+              ac.seat_capacity,
               (SELECT COALESCE(SUM(bf2.fare_amount), 0)::numeric
                FROM booking_flights bf2
                JOIN bookings b2 ON b2.id = bf2.booking_id
@@ -820,17 +887,41 @@ router.get('/reports/flight-profitability', requireAuth, requireRoles(...ROLES_F
                FROM finance_expenses e2
                WHERE e2.flight_id = f.id
                  AND e2.incurred_on >= DATE($1::date)
-                 AND e2.incurred_on <= DATE($2::date)) AS direct_expenses
+                 AND e2.incurred_on <= DATE($2::date)) AS direct_expenses,
+              (SELECT COUNT(DISTINCT bp.passenger_id)::int
+               FROM booking_flights bf3
+               JOIN bookings b3 ON b3.id = bf3.booking_id
+               JOIN booking_passengers bp ON bp.booking_id = b3.id
+               WHERE bf3.flight_id = f.id
+                 AND UPPER(TRIM(COALESCE(b3.booking_status, ''))) <> 'CANCELLED') AS passenger_count
        FROM flights f
+       LEFT JOIN aircraft ac ON ac.id = f.aircraft_id
        WHERE DATE(f.departure_time) >= DATE($1::date) AND DATE(f.departure_time) <= DATE($2::date)
-       ORDER BY f.departure_time ASC`,
-      [from, to]
+       ${extra}
+       ORDER BY f.departure_time ASC
+       LIMIT 500`,
+      vals
     );
-    const rows = r.rows.map((x) => ({
-      ...x,
-      estimated_margin: Number(x.revenue_from_bookings) - Number(x.direct_expenses)
-    }));
-    return res.status(200).json({ from, to, flights: rows, note: 'Margin is fare sum minus expenses tagged to the flight in this period.' });
+    const rows = r.rows.map((x) => {
+      const rev = Number(x.revenue_from_bookings);
+      const exp = Number(x.direct_expenses);
+      const pax = Number(x.passenger_count || 0);
+      const cap = Number(x.seat_capacity || 0);
+      const loadFactor = cap > 0 ? pax / cap : null;
+      const yieldPerPax = pax > 0 ? rev / pax : null;
+      return {
+        ...x,
+        estimated_margin: rev - exp,
+        load_factor: loadFactor,
+        yield_per_passenger: yieldPerPax
+      };
+    });
+    return res.status(200).json({
+      from,
+      to,
+      flights: rows,
+      note: 'Margin = itinerary fare on legs − direct expenses tagged to flight (period). Load factor = distinct passengers on booking / aircraft seat capacity.'
+    });
   } catch (error) {
     return res.status(500).json({ message: 'Failed to load flight profitability.', error: error.message });
   }
@@ -870,6 +961,433 @@ router.get('/reports/sales-reconciliation', requireAuth, requireRoles(...ROLES_F
     });
   } catch (error) {
     return res.status(500).json({ message: 'Failed to reconcile sales.', error: error.message });
+  }
+});
+
+router.get('/reports/reconciliation-detail', requireAuth, requireRoles(...ROLES_FINANCE_ORG), async (req, res) => {
+  const from = String(req.query.from || new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10));
+  const to = String(req.query.to || new Date().toISOString().slice(0, 10));
+  try {
+    const [ticketSales, bookingPayments, unpaid, channels] = await Promise.all([
+      pool.query(
+        `SELECT COALESCE(SUM(bf.fare_amount), 0)::numeric AS v
+         FROM tickets t
+         JOIN bookings b ON b.id = t.booking_id
+         JOIN booking_flights bf ON bf.booking_id = b.id
+         WHERE DATE(t.issued_at) >= DATE($1::date) AND DATE(t.issued_at) <= DATE($2::date)`,
+        [from, to]
+      ),
+      pool.query(
+        `SELECT COALESCE(SUM(p.amount - COALESCE(rf.refunded, 0)), 0)::numeric AS v
+         FROM payments p
+         LEFT JOIN (SELECT payment_id, SUM(refund_amount)::numeric AS refunded FROM refunds GROUP BY payment_id) rf ON rf.payment_id = p.id
+         JOIN bookings b ON b.id = p.booking_id
+         WHERE DATE(p.processed_at) >= DATE($1::date) AND DATE(p.processed_at) <= DATE($2::date)
+           AND UPPER(TRIM(p.payment_status)) IN ('PAID', 'SUCCESS', 'PARTIALLY_REFUNDED', 'REFUNDED')`,
+        [from, to]
+      ),
+      pool.query(
+        `SELECT COUNT(*)::int AS c, COALESCE(SUM(b.total_amount), 0)::numeric AS gross
+         FROM bookings b
+         WHERE DATE(b.created_at) >= DATE($1::date) AND DATE(b.created_at) <= DATE($2::date)
+           AND UPPER(TRIM(b.booking_status)) <> 'CANCELLED'
+           AND UPPER(TRIM(b.payment_status)) IN ('UNPAID', 'PARTIALLY_PAID')`,
+        [from, to]
+      ),
+      pool.query(
+        `SELECT UPPER(TRIM(COALESCE(p.payment_type, 'UNKNOWN'))) AS channel,
+                COUNT(*)::int AS payment_count,
+                COALESCE(SUM(p.amount - COALESCE(rf.refunded, 0)), 0)::numeric AS net_collected
+         FROM payments p
+         LEFT JOIN (SELECT payment_id, SUM(refund_amount)::numeric AS refunded FROM refunds GROUP BY payment_id) rf ON rf.payment_id = p.id
+         JOIN bookings b ON b.id = p.booking_id
+         WHERE DATE(p.processed_at) >= DATE($1::date) AND DATE(p.processed_at) <= DATE($2::date)
+           AND UPPER(TRIM(p.payment_status)) IN ('PAID', 'SUCCESS', 'PARTIALLY_REFUNDED', 'REFUNDED')
+         GROUP BY 1
+         ORDER BY net_collected DESC`,
+        [from, to]
+      )
+    ]);
+    const ch = channels.rows;
+    const online = ch.filter((r) => /ONLINE|CARD|WEB|STRIPE|PSP/i.test(String(r.channel))).reduce((s, r) => s + Number(r.net_collected), 0);
+    const cash = ch.filter((r) => /CASH/i.test(String(r.channel))).reduce((s, r) => s + Number(r.net_collected), 0);
+    const agentCh = ch.filter((r) => /AGENT|DESK|BSP/i.test(String(r.channel))).reduce((s, r) => s + Number(r.net_collected), 0);
+    return res.json({
+      from,
+      to,
+      ticketSales: Number(ticketSales.rows[0]?.v || 0),
+      bookingPayments: Number(bookingPayments.rows[0]?.v || 0),
+      unpaidBookings: { count: Number(unpaid.rows[0]?.c || 0), grossAmount: Number(unpaid.rows[0]?.gross || 0) },
+      paymentChannels: ch,
+      onlinePayments: online,
+      cashPayments: cash,
+      agentPayments: agentCh
+    });
+  } catch (error) {
+    return res.status(500).json({ message: 'Failed to load reconciliation detail.', error: error.message });
+  }
+});
+
+router.get('/reports/route-profitability', requireAuth, requireRoles(...ROLES_FINANCE_ORG), async (req, res) => {
+  const from = String(req.query.from || new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10));
+  const to = String(req.query.to || new Date().toISOString().slice(0, 10));
+  try {
+    const r = await pool.query(
+      `WITH per_flight AS (
+         SELECT f.id AS flight_id,
+                f.departure_airport,
+                f.arrival_airport,
+                (SELECT COALESCE(SUM(bf2.fare_amount), 0)::numeric
+                 FROM booking_flights bf2
+                 JOIN bookings b2 ON b2.id = bf2.booking_id
+                 WHERE bf2.flight_id = f.id
+                   AND UPPER(TRIM(COALESCE(b2.booking_status, ''))) <> 'CANCELLED') AS revenue,
+                (SELECT COALESCE(SUM(e.amount), 0)::numeric
+                 FROM finance_expenses e
+                 WHERE e.flight_id = f.id
+                   AND e.incurred_on >= DATE($1::date)
+                   AND e.incurred_on <= DATE($2::date)) AS direct_exp,
+                (SELECT COUNT(DISTINCT bp.passenger_id)::int
+                 FROM booking_flights bf3
+                 JOIN bookings b3 ON b3.id = bf3.booking_id
+                 JOIN booking_passengers bp ON bp.booking_id = b3.id
+                 WHERE bf3.flight_id = f.id
+                   AND UPPER(TRIM(COALESCE(b3.booking_status, ''))) <> 'CANCELLED') AS passenger_count
+         FROM flights f
+         WHERE DATE(f.departure_time) >= DATE($1::date) AND DATE(f.departure_time) <= DATE($2::date)
+       )
+       SELECT departure_airport || '→' || arrival_airport AS route,
+              COUNT(*)::int AS flight_count,
+              COALESCE(SUM(revenue), 0)::numeric AS route_revenue,
+              COALESCE(SUM(direct_exp), 0)::numeric AS route_cost_estimate,
+              COALESCE(SUM(passenger_count), 0)::int AS passenger_count
+       FROM per_flight
+       GROUP BY departure_airport, arrival_airport
+       ORDER BY route_revenue DESC
+       LIMIT 80`,
+      [from, to]
+    );
+    const routes = r.rows.map((row) => ({
+      ...row,
+      route_margin: Number(row.route_revenue) - Number(row.route_cost_estimate || 0)
+    }));
+    return res.json({
+      from,
+      to,
+      routes,
+      note: 'Per-flight itinerary fare and tagged expenses rolled up by city-pair.'
+    });
+  } catch (error) {
+    return res.status(500).json({ message: 'Failed to load route profitability.', error: error.message });
+  }
+});
+
+router.get('/reports/expense-trend', requireAuth, requireRoles('admin', 'finance'), async (req, res) => {
+  const from = String(req.query.from || new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10));
+  const to = String(req.query.to || new Date().toISOString().slice(0, 10));
+  const category = req.query.category ? String(req.query.category).slice(0, 60) : null;
+  try {
+    const vals = [from, to];
+    let catF = '';
+    if (category) {
+      vals.push(category);
+      catF = `AND e.category = $${vals.length}`;
+    }
+    const r = await pool.query(
+      `SELECT e.incurred_on::text AS day, e.category, COALESCE(SUM(e.amount), 0)::numeric AS total
+       FROM finance_expenses e
+       WHERE e.incurred_on >= $1::date AND e.incurred_on <= $2::date ${catF}
+       GROUP BY e.incurred_on, e.category
+       ORDER BY e.incurred_on ASC, e.category ASC`,
+      vals
+    );
+    return res.json({ from, to, series: r.rows });
+  } catch (error) {
+    return res.status(500).json({ message: 'Failed to load expense trend.', error: error.message });
+  }
+});
+
+router.get('/reports/cash-summary', requireAuth, requireRoles(...ROLES_FINANCE_ORG), async (req, res) => {
+  const from = String(req.query.from || new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10));
+  const to = String(req.query.to || new Date().toISOString().slice(0, 10));
+  try {
+    const [pay, ref, dep] = await Promise.all([
+      pool.query(
+        `SELECT COALESCE(SUM(p.amount - COALESCE(rf.refunded, 0)), 0)::numeric AS v
+         FROM payments p
+         LEFT JOIN (SELECT payment_id, SUM(refund_amount)::numeric AS refunded FROM refunds GROUP BY payment_id) rf ON rf.payment_id = p.id
+         JOIN bookings b ON b.id = p.booking_id
+         WHERE DATE(p.processed_at) >= DATE($1::date) AND DATE(p.processed_at) <= DATE($2::date)
+           AND UPPER(TRIM(p.payment_status)) IN ('PAID', 'SUCCESS', 'PARTIALLY_REFUNDED', 'REFUNDED')`,
+        [from, to]
+      ),
+      pool.query(
+        `SELECT COALESCE(SUM(r.refund_amount), 0)::numeric AS v
+         FROM refunds r
+         WHERE DATE(r.refunded_at) >= DATE($1::date) AND DATE(r.refunded_at) <= DATE($2::date)`,
+        [from, to]
+      ),
+      pool
+        .query(
+          `SELECT COALESCE(SUM(amount), 0)::numeric AS v FROM finance_bank_deposits
+           WHERE deposit_date >= $1::date AND deposit_date <= $2::date`,
+          [from, to]
+        )
+        .catch(() => ({ rows: [{ v: 0 }] }))
+    ]);
+    const inflows = Number(pay.rows[0]?.v || 0) + Number(dep.rows[0]?.v || 0);
+    const outflows = Number(ref.rows[0]?.v || 0);
+    return res.json({
+      from,
+      to,
+      openingCash: 0,
+      paymentInflows: Number(pay.rows[0]?.v || 0),
+      bankDeposits: Number(dep.rows[0]?.v || 0),
+      refundOutflows: outflows,
+      netMovement: inflows - outflows,
+      closingCash: inflows - outflows,
+      note: 'Opening cash is not stored; treat closing as net movement in range. Record bank deposits under POST /bank-deposits.'
+    });
+  } catch (error) {
+    return res.status(500).json({ message: 'Failed to load cash summary.', error: error.message });
+  }
+});
+
+router.post('/bank-deposits', requireAuth, requireRoles('admin', 'finance'), async (req, res) => {
+  const { depositDate, amount, currency, reference, notes } = req.body || {};
+  const amt = Number(amount);
+  if (!depositDate || !Number.isFinite(amt) || amt <= 0) {
+    return res.status(400).json({ message: 'depositDate and positive amount are required.' });
+  }
+  try {
+    const ins = await pool.query(
+      `INSERT INTO finance_bank_deposits (deposit_date, amount, currency, reference, notes, recorded_by)
+       VALUES ($1::date, $2, $3, $4, $5, $6::uuid) RETURNING *`,
+      [
+        String(depositDate).slice(0, 10),
+        amt,
+        String(currency || 'USD').slice(0, 3).toUpperCase(),
+        reference ? String(reference).slice(0, 160) : null,
+        notes ? String(notes).slice(0, 2000) : null,
+        req.user.userId
+      ]
+    );
+    return res.status(201).json({ deposit: ins.rows[0] });
+  } catch (e) {
+    if (e?.code === '42P01') return res.status(503).json({ message: 'Apply finance_airline_erp.sql migration.' });
+    return res.status(500).json({ message: 'Failed to record deposit.', error: e.message });
+  }
+});
+
+router.get('/reports/monthly-pnl', requireAuth, requireRoles(...ROLES_FINANCE_ORG), async (req, res) => {
+  const month = String(req.query.month || new Date().toISOString().slice(0, 7) + '-01').slice(0, 10);
+  try {
+    const [rev, ref, exp] = await Promise.all([
+      pool.query(
+        `SELECT COALESCE(SUM(p.amount - COALESCE(rf.refunded, 0)), 0)::numeric AS v
+         FROM payments p
+         LEFT JOIN (SELECT payment_id, SUM(refund_amount)::numeric AS refunded FROM refunds GROUP BY payment_id) rf ON rf.payment_id = p.id
+         JOIN bookings b ON b.id = p.booking_id
+         WHERE p.processed_at >= $1::date AND p.processed_at < ($1::date + INTERVAL '1 month')
+           AND UPPER(TRIM(p.payment_status)) IN ('PAID', 'SUCCESS', 'PARTIALLY_REFUNDED', 'REFUNDED')`,
+        [month]
+      ),
+      pool.query(
+        `SELECT COALESCE(SUM(r.refund_amount), 0)::numeric AS v
+         FROM refunds r
+         WHERE r.refunded_at >= $1::date AND r.refunded_at < ($1::date + INTERVAL '1 month')`,
+        [month]
+      ),
+      pool.query(
+        `SELECT COALESCE(SUM(amount), 0)::numeric AS v FROM finance_expenses
+         WHERE incurred_on >= $1::date AND incurred_on < ($1::date + INTERVAL '1 month')`,
+        [month]
+      )
+    ]);
+    const revenue = Number(rev.rows[0]?.v || 0);
+    const refunds = Number(ref.rows[0]?.v || 0);
+    const expenses = Number(exp.rows[0]?.v || 0);
+    const net = revenue - refunds - expenses;
+    return res.json({ month, revenue, refunds, expenses, netOperatingCash: net });
+  } catch (error) {
+    return res.status(500).json({ message: 'Failed to load monthly P&L.', error: error.message });
+  }
+});
+
+router.get('/reports/cash-runway', requireAuth, requireRoles(...ROLES_FINANCE_ORG), async (req, res) => {
+  const from = String(req.query.from || new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10));
+  const to = String(req.query.to || new Date().toISOString().slice(0, 10));
+  const cashOnHand = Number(req.query.cashOnHand || 0);
+  try {
+    const [burn] = await pool.query(
+      `WITH days AS (
+         SELECT generate_series($1::date, $2::date, interval '1 day')::date AS d
+       ),
+       daily AS (
+         SELECT d.d,
+           COALESCE((SELECT SUM(p.amount - COALESCE(rf.refunded,0)) FROM payments p
+             LEFT JOIN (SELECT payment_id, SUM(refund_amount)::numeric refunded FROM refunds GROUP BY payment_id) rf ON rf.payment_id = p.id
+             JOIN bookings b ON b.id = p.booking_id
+             WHERE DATE(p.processed_at) = d.d AND UPPER(TRIM(p.payment_status)) IN ('PAID','SUCCESS','PARTIALLY_REFUNDED','REFUNDED')),0) AS rev,
+           COALESCE((SELECT SUM(r.refund_amount) FROM refunds r WHERE DATE(r.refunded_at)=d.d),0) AS refd,
+           COALESCE((SELECT SUM(e.amount) FROM finance_expenses e WHERE e.incurred_on = d.d),0) AS exp
+         FROM days d
+       )
+       SELECT AVG(GREATEST(exp + refd - rev, 0))::numeric AS avg_daily_burn,
+              SUM(GREATEST(exp + refd - rev, 0))::numeric AS total_burn_days
+       FROM daily`,
+      [from, to]
+    );
+    const avgBurn = Number(burn.rows[0]?.avg_daily_burn || 0);
+    const runwayDays = avgBurn > 0 && cashOnHand > 0 ? cashOnHand / avgBurn : null;
+    return res.json({
+      from,
+      to,
+      cashOnHand,
+      averageDailyCashBurn: avgBurn,
+      runwayDays,
+      note: 'Burn approximates max(0, expenses+refunds−payments) per day. Pass cashOnHand query to estimate runway.'
+    });
+  } catch (error) {
+    return res.status(500).json({ message: 'Failed to compute cash runway.', error: error.message });
+  }
+});
+
+router.get('/accounts-receivable', requireAuth, requireRoles(...ROLES_FINANCE_ORG), async (_req, res) => {
+  try {
+    const r = await pool.query(
+      `SELECT b.id, b.pnr, b.total_amount, b.currency, b.payment_status, b.booking_status, b.created_at,
+              u.full_name AS agent_name,
+              CURRENT_DATE - DATE(b.created_at) AS age_days,
+              CASE
+                WHEN CURRENT_DATE - DATE(b.created_at) <= 7 THEN '0-7'
+                WHEN CURRENT_DATE - DATE(b.created_at) <= 30 THEN '8-30'
+                ELSE '30+'
+              END AS aging_bucket
+       FROM bookings b
+       LEFT JOIN users u ON u.id = b.created_by
+       WHERE UPPER(TRIM(b.booking_status)) <> 'CANCELLED'
+         AND UPPER(TRIM(b.payment_status)) IN ('UNPAID', 'PARTIALLY_PAID')
+       ORDER BY b.created_at ASC
+       LIMIT 2000`
+    );
+    const sum = r.rows.reduce((s, x) => s + Number(x.total_amount || 0), 0);
+    return res.json({ receivables: r.rows, totalOpen: sum });
+  } catch (error) {
+    return res.status(500).json({ message: 'Failed to load AR.', error: error.message });
+  }
+});
+
+router.get('/accounts-payable', requireAuth, requireRoles('admin', 'finance'), async (_req, res) => {
+  try {
+    const r = await pool.query(
+      `SELECT * FROM finance_vendor_invoices WHERE status IN ('OPEN', 'PARTIAL') ORDER BY due_on ASC LIMIT 500`
+    );
+    const total = r.rows.reduce((s, x) => s + Number(x.amount || 0), 0);
+    return res.json({ payables: r.rows, totalOpen: total });
+  } catch (e) {
+    if (e?.code === '42P01') return res.json({ payables: [], totalOpen: 0 });
+    return res.status(500).json({ message: 'Failed to load AP.', error: e.message });
+  }
+});
+
+router.post('/vendor-invoices', requireAuth, requireRoles('admin', 'finance'), async (req, res) => {
+  const b = req.body || {};
+  const amt = Number(b.amount);
+  if (!b.vendorName || !Number.isFinite(amt) || amt <= 0 || !b.dueOn) {
+    return res.status(400).json({ message: 'vendorName, amount, and dueOn are required.' });
+  }
+  try {
+    const ins = await pool.query(
+      `INSERT INTO finance_vendor_invoices (vendor_name, invoice_ref, category, amount, currency, due_on, status, notes, entered_by)
+       VALUES ($1, $2, $3, $4, $5, $6::date, 'OPEN', $7, $8::uuid) RETURNING *`,
+      [
+        String(b.vendorName).slice(0, 200),
+        b.invoiceRef ? String(b.invoiceRef).slice(0, 120) : null,
+        String(b.category || 'OTHER').slice(0, 60),
+        amt,
+        String(b.currency || 'USD').slice(0, 3).toUpperCase(),
+        String(b.dueOn).slice(0, 10),
+        b.notes ? String(b.notes).slice(0, 4000) : null,
+        req.user.userId
+      ]
+    );
+    return res.status(201).json({ invoice: ins.rows[0] });
+  } catch (e) {
+    if (e?.code === '42P01') return res.status(503).json({ message: 'Apply finance_airline_erp.sql migration.' });
+    return res.status(500).json({ message: 'Failed to create vendor invoice.', error: e.message });
+  }
+});
+
+router.get('/reports/agent-ledger', requireAuth, requireRoles(...ROLES_FINANCE_ORG), async (req, res) => {
+  const from = String(req.query.from || new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10));
+  const to = String(req.query.to || new Date().toISOString().slice(0, 10));
+  try {
+    const r = await pool.query(
+      `SELECT b.created_by AS agent_id, u.full_name AS agent_name,
+              COUNT(DISTINCT b.id)::int AS booking_count,
+              COALESCE(SUM(b.total_amount), 0)::numeric AS booked_gross,
+              COALESCE(SUM(
+                (SELECT COALESCE(SUM(p.amount - COALESCE(rf.refunded,0)),0) FROM payments p
+                 LEFT JOIN (SELECT payment_id, SUM(refund_amount)::numeric refunded FROM refunds GROUP BY payment_id) rf ON rf.payment_id = p.id
+                 WHERE p.booking_id = b.id AND UPPER(TRIM(p.payment_status)) NOT IN ('PENDING','FAILED'))
+              ), 0)::numeric AS net_payments,
+              COALESCE(MAX((
+                SELECT MAX(ta.commission_percent) FROM sales_travel_agents ta
+                WHERE ta.user_id = b.created_by OR ta.id = b.travel_agent_id
+              )), 0)::numeric AS commission_pct,
+              COALESCE(SUM(b.total_amount) FILTER (WHERE UPPER(TRIM(b.payment_status)) IN ('UNPAID','PARTIALLY_PAID')), 0)::numeric AS outstanding_balance
+       FROM bookings b
+       JOIN users u ON u.id = b.created_by
+       WHERE DATE(b.created_at) >= DATE($1::date) AND DATE(b.created_at) <= DATE($2::date)
+         AND u.role::text IN ('agent', 'booking_agent')
+       GROUP BY b.created_by, u.full_name
+       ORDER BY booked_gross DESC NULLS LAST`,
+      [from, to]
+    );
+    const rows = r.rows.map((row) => ({
+      ...row,
+      commission_estimate: (Number(row.booked_gross) * Number(row.commission_pct || 0)) / 100
+    }));
+    return res.json({ from, to, agents: rows });
+  } catch (error) {
+    return res.status(500).json({ message: 'Failed to load agent ledger.', error: error.message });
+  }
+});
+
+router.get('/refund-requests/:requestId/audit-trail', requireAuth, requireRoles(...ROLES_REFUND_QUEUE), async (req, res) => {
+  const { requestId } = req.params;
+  if (!/^[0-9a-f-]{36}$/i.test(requestId)) return res.status(400).json({ message: 'Invalid request id.' });
+  try {
+    const [rq, logs, txns] = await Promise.all([
+      pool.query(
+        `SELECT rr.*, p.booking_id, p.payment_status, b.pnr
+         FROM refund_requests rr
+         JOIN payments p ON p.id = rr.payment_id
+         JOIN bookings b ON b.id = p.booking_id
+         WHERE rr.id = $1::uuid`,
+        [requestId]
+      ),
+      pool.query(
+        `SELECT al.id, al.user_id, al.action, al.entity, al.entity_id, al.metadata, al.created_at, u.full_name
+         FROM audit_logs al
+         LEFT JOIN users u ON u.id = al.user_id
+         WHERE al.entity = 'refund_requests' AND al.entity_id = $1::uuid
+         ORDER BY al.created_at ASC`,
+        [requestId]
+      ),
+      pool.query(
+        `SELECT id, txn_type, amount, currency, description, metadata, created_at
+         FROM finance_transactions
+         WHERE refund_request_id = $1::uuid
+         ORDER BY created_at ASC`,
+        [requestId]
+      )
+    ]);
+    if (!rq.rows[0]) return res.status(404).json({ message: 'Refund request not found.' });
+    return res.json({ refundRequest: rq.rows[0], auditLogs: logs.rows, ledgerEntries: txns.rows });
+  } catch (error) {
+    return res.status(500).json({ message: 'Failed to load refund audit trail.', error: error.message });
   }
 });
 

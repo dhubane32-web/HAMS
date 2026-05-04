@@ -433,7 +433,17 @@ export default function BookingPage() {
 
       setBookingSuccess(result);
       if (result.tickets?.length && result.booking?.pnr && result.booking?.id) {
-        setTicketInfo({ pnr: result.booking.pnr, bookingId: result.booking.id, tickets: result.tickets });
+        const issuedFallback = new Date().toISOString();
+        setTicketInfo({
+          pnr: result.booking.pnr,
+          bookingId: result.booking.id,
+          tickets: result.tickets.map((t) => ({
+            id: t.id,
+            ticket_number: t.ticket_number,
+            issued_at: t.issued_at ?? issuedFallback,
+            ticket_status: t.ticket_status
+          }))
+        });
       }
     } catch {
       setBookingError('Unable to create booking.');

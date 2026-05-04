@@ -25,7 +25,7 @@ export const ROLES_TICKET_ISSUE = ['admin', 'booking_agent', 'agent', 'sales_man
 export const ROLES_TICKET_DOCS = ['admin', 'booking_agent', 'agent', 'sales_manager', 'finance'];
 
 /** Finance module: ledger, expenses, org-wide dashboards. */
-export const ROLES_FINANCE_ORG = ['admin', 'finance', 'sales_manager'];
+export const ROLES_FINANCE_ORG = ['admin', 'super_admin', 'finance', 'sales_manager'];
 
 /** Refund request queue: finance sees all; desk roles may see own where handler filters. */
 export const ROLES_REFUND_QUEUE = ['admin', 'finance', 'agent', 'booking_agent', 'customer_service', 'sales_manager'];

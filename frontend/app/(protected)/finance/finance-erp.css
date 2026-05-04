@@ -1,0 +1,95 @@
+/* Finance & accounting — airline ERP shell */
+.finance-erp {
+  --fin-bg: #f4f7fb;
+  --fin-card: #ffffff;
+  --fin-border: #e2e8f0;
+  --fin-text: #0f172a;
+  --fin-muted: #64748b;
+  --fin-accent: #0047ab;
+  --fin-positive: #0f766e;
+  --fin-negative: #b91c1c;
+}
+
+.finance-erp-shell {
+  max-width: 1180px;
+  margin: 0 auto;
+}
+
+.finance-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+  gap: 0.65rem;
+}
+
+.finance-kpi-card {
+  background: var(--fin-card);
+  border: 1px solid var(--fin-border);
+  border-radius: 10px;
+  padding: 0.65rem 0.75rem;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+.finance-kpi-card h4 {
+  margin: 0 0 0.2rem;
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--fin-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.finance-kpi-card .val {
+  margin: 0;
+  font-size: 1.12rem;
+  font-weight: 700;
+  color: var(--fin-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.finance-chart-card {
+  background: var(--fin-card);
+  border: 1px solid var(--fin-border);
+  border-radius: 12px;
+  padding: 0.75rem 1rem 0.5rem;
+  margin-top: 0.75rem;
+}
+
+.finance-chart-card h3 {
+  margin: 0 0 0.5rem;
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: var(--fin-text);
+}
+
+.finance-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: flex-end;
+  margin-bottom: 0.65rem;
+}
+
+.finance-toolbar label {
+  font-size: 0.78rem;
+  color: var(--fin-muted);
+}
+
+.finance-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-bottom: 0.75rem;
+}
+
+.finance-tabs button {
+  border-radius: 8px;
+}
+
+.finance-section-title {
+  font-size: 0.95rem;
+  font-weight: 600;
+  margin: 1rem 0 0.4rem;
+  color: var(--fin-text);
+  border-bottom: 1px solid var(--fin-border);
+  padding-bottom: 0.25rem;
+}

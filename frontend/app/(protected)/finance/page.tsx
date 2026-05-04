@@ -4,13 +4,44 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 import type { UserRole } from '@/lib/roles';
 import { getPublicApiBaseUrl } from '@/lib/api-base';
+import { getClientAuthToken } from '@/lib/auth-session';
+import {
+  ResponsiveContainer,
+  LineChart,
+  Line,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  Tooltip,
+  CartesianGrid,
+  Legend,
+  PieChart,
+  Pie,
+  Cell
+} from 'recharts';
+import './finance-erp.css';
 
 const API_BASE_URL = getPublicApiBaseUrl();
 
-type Tab = 'overview' | 'payments' | 'refunds' | 'expenses' | 'reports';
+const EXPENSE_CATEGORIES = [
+  'FUEL',
+  'ACMI_LEASE',
+  'AIRPORT_FEES',
+  'GROUND_HANDLING',
+  'CREW',
+  'MAINTENANCE',
+  'CATERING',
+  'OFFICE_ADMIN',
+  'OTHER'
+] as const;
+
+const CHART_COLORS = ['#0047AB', '#0d9488', '#ea580c', '#7c3aed', '#db2777', '#64748b'];
+
+type Tab = 'overview' | 'payments' | 'refunds' | 'expenses' | 'treasury' | 'reports';
 
 function getToken() {
-  return typeof window !== 'undefined' ? localStorage.getItem('hams_token') : null;
+  return getClientAuthToken();
 }
 
 function roleFromToken(): UserRole | null {
@@ -62,7 +93,7 @@ export default function FinancePage() {
   const [expTo, setExpTo] = useState(today);
   const [expenses, setExpenses] = useState<Array<Record<string, unknown>>>([]);
   const [expForm, setExpForm] = useState({
-    category: 'GROUND_HANDLING',
+    category: 'FUEL',
     amount: '',
     incurredOn: today,
     description: '',
@@ -84,6 +115,26 @@ export default function FinancePage() {
   const [agentSales, setAgentSales] = useState<Array<Record<string, unknown>>>([]);
   const [cashRep, setCashRep] = useState<{ paymentsByDay?: unknown[]; refundsByDay?: unknown[] } | null>(null);
   const [ticketRev, setTicketRev] = useState<Array<Record<string, unknown>>>([]);
+  const [reconDetail, setReconDetail] = useState<Record<string, unknown> | null>(null);
+  const [routeProfit, setRouteProfit] = useState<Array<Record<string, unknown>>>([]);
+  const [expTrend, setExpTrend] = useState<Array<Record<string, unknown>>>([]);
+  const [cashSummary, setCashSummary] = useState<Record<string, unknown> | null>(null);
+  const [monthlyPnl, setMonthlyPnl] = useState<Record<string, unknown> | null>(null);
+  const [cashRunway, setCashRunway] = useState<Record<string, unknown> | null>(null);
+  const [arList, setArList] = useState<Array<Record<string, unknown>>>([]);
+  const [apList, setApList] = useState<Array<Record<string, unknown>>>([]);
+  const [agentLedger, setAgentLedger] = useState<Array<Record<string, unknown>>>([]);
+  const [repFlightId, setRepFlightId] = useState('');
+  const [repRouteFilter, setRepRouteFilter] = useState('');
+  const [pnlMonth, setPnlMonth] = useState(() => new Date().toISOString().slice(0, 7));
+  const [runwayCash, setRunwayCash] = useState('250000');
+  const [refundAudit, setRefundAudit] = useState<Record<string, unknown> | null>(null);
+  const [viVendor, setViVendor] = useState('');
+  const [viAmount, setViAmount] = useState('');
+  const [viDue, setViDue] = useState(today);
+  const [viCat, setViCat] = useState('AIRPORT_FEES');
+  const [depAmount, setDepAmount] = useState('');
+  const [depDate, setDepDate] = useState(today);
 
   const fetchJson = useCallback(async <T,>(path: string, init?: RequestInit): Promise<T> => {
     const token = getToken();
@@ -159,6 +210,29 @@ export default function FinancePage() {
       void loadDashboard().finally(() => setLoading(false));
     }
   }, [tab, loadDashboard]);
+
+  useEffect(() => {
+    if (tab !== 'overview' || !canSeeOrgReports(role)) return;
+    let cancel = false;
+    void (async () => {
+      try {
+        const [dr, et] = await Promise.all([
+          fetchJson<{ series: unknown[] }>(`/api/finance/reports/daily-revenue?from=${repFrom}&to=${repTo}`),
+          fetchJson<{ series: unknown[] }>(`/api/finance/reports/expense-trend?from=${repFrom}&to=${repTo}`).catch(() => ({
+            series: []
+          }))
+        ]);
+        if (cancel) return;
+        setDailyRev((dr.series || []) as Array<Record<string, unknown>>);
+        setExpTrend((et.series || []) as Array<Record<string, unknown>>);
+      } catch {
+        /* charts optional */
+      }
+    })();
+    return () => {
+      cancel = true;
+    };
+  }, [tab, repFrom, repTo, role, fetchJson]);
 
   useEffect(() => {
     if (tab === 'payments') {
@@ -279,6 +353,12 @@ export default function FinancePage() {
     if (!canSeeOrgReports(role) && role !== 'agent') return;
     setLoading(true);
     try {
+      const fpQ =
+        repFlightId.trim().length >= 36
+          ? `flightId=${encodeURIComponent(repFlightId.trim())}`
+          : repRouteFilter.trim()
+            ? `route=${encodeURIComponent(repRouteFilter.trim())}`
+            : '';
       const [o, rr, dr, cs, tr, ag] = await Promise.all([
         fetchJson<{ bookings: unknown[] }>(`/api/finance/reports/outstanding-balances`).catch(() => ({ bookings: [] })),
         fetchJson<{ routes: unknown[] }>(`/api/finance/reports/route-revenue?from=${repFrom}&to=${repTo}`).catch(() => ({
@@ -305,15 +385,69 @@ export default function FinancePage() {
       setAgentSales((ag.agentSales || []) as Array<Record<string, unknown>>);
 
       if (canSeeOrgReports(role)) {
-        const [rc, fp] = await Promise.all([
+        const fpPath = `/api/finance/reports/flight-profitability?from=${repFrom}&to=${repTo}${fpQ ? `&${fpQ}` : ''}`;
+        const [
+          rc,
+          fp,
+          rd,
+          rp,
+          et,
+          csum,
+          pnl,
+          run,
+          ar,
+          ap,
+          al
+        ] = await Promise.all([
           fetchJson<Record<string, unknown>>(`/api/finance/reports/sales-reconciliation?from=${repFrom}&to=${repTo}`),
-          fetchJson<{ flights: unknown[] }>(`/api/finance/reports/flight-profitability?from=${repFrom}&to=${repTo}`)
+          fetchJson<{ flights: unknown[] }>(fpPath).catch(() => ({ flights: [] })),
+          fetchJson<Record<string, unknown>>(
+            `/api/finance/reports/reconciliation-detail?from=${repFrom}&to=${repTo}`
+          ).catch(() => ({})),
+          fetchJson<{ routes: unknown[] }>(
+            `/api/finance/reports/route-profitability?from=${repFrom}&to=${repTo}`
+          ).catch(() => ({ routes: [] })),
+          fetchJson<{ series: unknown[] }>(
+            `/api/finance/reports/expense-trend?from=${repFrom}&to=${repTo}`
+          ).catch(() => ({ series: [] })),
+          fetchJson<Record<string, unknown>>(
+            `/api/finance/reports/cash-summary?from=${repFrom}&to=${repTo}`
+          ).catch(() => ({})),
+          fetchJson<Record<string, unknown>>(
+            `/api/finance/reports/monthly-pnl?month=${pnlMonth}-01`
+          ).catch(() => ({})),
+          fetchJson<Record<string, unknown>>(
+            `/api/finance/reports/cash-runway?from=${repFrom}&to=${repTo}&cashOnHand=${encodeURIComponent(runwayCash || '0')}`
+          ).catch(() => ({})),
+          fetchJson<{ receivables: unknown[] }>(`/api/finance/accounts-receivable`).catch(() => ({ receivables: [] })),
+          fetchJson<{ payables: unknown[] }>(`/api/finance/accounts-payable`).catch(() => ({ payables: [] })),
+          fetchJson<{ agents: unknown[] }>(
+            `/api/finance/reports/agent-ledger?from=${repFrom}&to=${repTo}`
+          ).catch(() => ({ agents: [] }))
         ]);
         setRecon(rc);
         setFlightProfit((fp.flights || []) as Array<Record<string, unknown>>);
+        setReconDetail(rd);
+        setRouteProfit((rp.routes || []) as Array<Record<string, unknown>>);
+        setExpTrend((et.series || []) as Array<Record<string, unknown>>);
+        setCashSummary(csum);
+        setMonthlyPnl(pnl);
+        setCashRunway(run);
+        setArList((ar.receivables || []) as Array<Record<string, unknown>>);
+        setApList((ap.payables || []) as Array<Record<string, unknown>>);
+        setAgentLedger((al.agents || []) as Array<Record<string, unknown>>);
       } else {
         setRecon(null);
         setFlightProfit([]);
+        setReconDetail(null);
+        setRouteProfit([]);
+        setExpTrend([]);
+        setCashSummary(null);
+        setMonthlyPnl(null);
+        setCashRunway(null);
+        setArList([]);
+        setApList([]);
+        setAgentLedger([]);
       }
       toast.success('Reports refreshed.');
     } catch (e) {
@@ -324,11 +458,46 @@ export default function FinancePage() {
   }
 
   const cards = (dash?.cards as Record<string, number> | undefined) || undefined;
+  const kpis = dash?.kpis as Record<string, number> | null | undefined;
   const scope = dash?.scope as string | undefined;
 
+  const revenueTrendData = useMemo(() => {
+    return dailyRev.map((row) => ({
+      day: String((row as { day: string }).day).slice(5),
+      revenue: Number((row as { net_collected: string }).net_collected)
+    }));
+  }, [dailyRev]);
+
+  const { expenseStackData, expenseBarKeys } = useMemo(() => {
+    const byDay: Record<string, Record<string, number>> = {};
+    const cats = new Set<string>();
+    for (const row of expTrend) {
+      const d = String((row as { day: string }).day);
+      const cat = String((row as { category: string }).category);
+      const t = Number((row as { total: string }).total);
+      if (!byDay[d]) byDay[d] = {};
+      byDay[d][cat] = (byDay[d][cat] || 0) + t;
+      cats.add(cat);
+    }
+    const keys = Array.from(cats).slice(0, 8);
+    const rows = Object.keys(byDay)
+      .sort()
+      .map((day) => ({ day: day.slice(5), ...byDay[day] }));
+    return { expenseStackData: rows, expenseBarKeys: keys };
+  }, [expTrend]);
+
+  const channelPieData = useMemo(() => {
+    const ch = reconDetail?.paymentChannels as Array<{ channel: string; net_collected: string }> | undefined;
+    if (!ch?.length) return [];
+    return ch.slice(0, 8).map((c) => ({
+      name: String(c.channel),
+      value: Math.round(Number(c.net_collected))
+    }));
+  }, [reconDetail]);
+
   return (
-    <main className="module-page">
-      <section className="module-card">
+    <main className="module-page finance-erp">
+      <section className="module-card finance-erp-shell">
         <h1>Finance &amp; accounting</h1>
         <p style={{ margin: 0, color: '#64748b', fontSize: '0.85rem' }}>
           Sales reconciliation, revenue, refund approvals, expenses, cash and agent reports, outstanding balances, and
@@ -342,23 +511,30 @@ export default function FinancePage() {
         ) : null}
       </section>
 
-      <div className="module-form-grid" style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem' }}>
-        {(['overview', 'payments', 'refunds', 'expenses', 'reports'] as const).map((t) => (
+      <div className="finance-tabs finance-erp-shell">
+        {(['overview', 'payments', 'refunds', 'expenses', 'treasury', 'reports'] as const).map((t) => (
           <button
             key={t}
             type="button"
             className={tab === t ? '' : 'secondary'}
             onClick={() => setTab(t)}
-            disabled={t === 'expenses' && role !== null && !canRecordExpenses(role)}
+            disabled={
+              (t === 'expenses' && role !== null && !canRecordExpenses(role)) ||
+              (t === 'treasury' && role !== null && !canSeeOrgReports(role))
+            }
           >
-            {t === 'overview' ? 'Dashboard' : t.charAt(0).toUpperCase() + t.slice(1)}
+            {t === 'overview'
+              ? 'Dashboard'
+              : t === 'treasury'
+                ? 'Treasury (AR/AP)'
+                : t.charAt(0).toUpperCase() + t.slice(1)}
           </button>
         ))}
       </div>
 
       {tab === 'overview' && (
-        <section className="module-card">
-          <h2>Finance dashboard</h2>
+        <section className="module-card finance-erp-shell">
+          <h2>Finance control tower</h2>
           {dashError ? (
             <p style={{ margin: '0 0 0.5rem', color: '#b91c1c', fontSize: '0.9rem' }} role="alert">
               {dashError}
@@ -366,14 +542,31 @@ export default function FinancePage() {
           ) : null}
           {loading && !cards ? (
             <p style={{ margin: 0, color: '#64748b' }}>Loading…</p>
-          ) : cards ? (
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))',
-                gap: '0.65rem'
-              }}
-            >
+          ) : null}
+          {kpis && canSeeOrgReports(role) ? (
+            <div className="finance-kpi-grid" style={{ marginBottom: '0.75rem' }}>
+              {[
+                ['Revenue today', kpis.revenueToday],
+                ['Revenue MTD (net collected)', kpis.revenueMTD],
+                ['Refunds today', kpis.refundsToday],
+                ['Refunds MTD', kpis.refundsMTD],
+                ['Outstanding bookings (#)', kpis.outstandingBookings],
+                ['Outstanding bookings ($)', kpis.outstandingBookingsAmount],
+                ['Agent desk exposure (unpaid)', kpis.outstandingAgentBalances],
+                ['Expenses MTD', kpis.expensesMTD],
+                ['AP open (vendor)', kpis.accountsPayableOpen],
+                ['Net cash MTD', kpis.netCashMTD],
+                ['Gross margin %', kpis.grossMarginPct != null ? (Number(kpis.grossMarginPct) * 100).toFixed(1) : '—']
+              ].map(([label, val]) => (
+                <div key={String(label)} className="finance-kpi-card">
+                  <h4>{label}</h4>
+                  <p className="val">{typeof val === 'number' && Number.isFinite(val) ? val.toFixed(2) : String(val ?? '—')}</p>
+                </div>
+              ))}
+            </div>
+          ) : null}
+          {cards ? (
+            <div className="finance-kpi-grid">
               {[
                 ['Net payments − refunds (today)', cards.netPaymentsToday],
                 ['Refunds (today)', cards.refundsToday],
@@ -383,37 +576,87 @@ export default function FinancePage() {
                 ['Ticket-linked fare (MTD)', cards.ticketLinkedFareMonth],
                 ['Expenses (MTD)', cards.expensesMonth]
               ].map(([label, val]) => (
-                <div
-                  key={String(label)}
-                  style={{
-                    border: '1px solid #e2e8f0',
-                    borderRadius: 10,
-                    padding: '0.55rem',
-                    background: '#f8fafc'
-                  }}
-                >
-                  <div style={{ fontSize: '0.72rem', color: '#64748b' }}>{label}</div>
-                  <div style={{ fontSize: '1.05rem', fontWeight: 700, color: '#0f172a' }}>
-                    {Number.isFinite(Number(val)) ? Number(val).toFixed(2) : '0.00'}
-                  </div>
+                <div key={String(label)} className="finance-kpi-card">
+                  <h4>{label}</h4>
+                  <p className="val">{Number.isFinite(Number(val)) ? Number(val).toFixed(2) : '0.00'}</p>
                 </div>
               ))}
             </div>
           ) : !loading ? (
             <p style={{ margin: 0, color: '#64748b' }}>No summary data yet.</p>
           ) : null}
-          <button
-            type="button"
-            className="secondary"
-            style={{ marginTop: '0.5rem' }}
-            disabled={loading}
-            onClick={() => {
-              setLoading(true);
-              void loadDashboard().finally(() => setLoading(false));
-            }}
-          >
-            {loading ? 'Refreshing…' : 'Refresh'}
-          </button>
+          {canSeeOrgReports(role) && revenueTrendData.length > 0 ? (
+            <div className="finance-chart-card">
+              <h3>Revenue trend (net collected)</h3>
+              <div style={{ width: '100%', height: 220 }}>
+                <ResponsiveContainer>
+                  <LineChart data={revenueTrendData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                    <XAxis dataKey="day" tick={{ fontSize: 11 }} />
+                    <YAxis tick={{ fontSize: 11 }} />
+                    <Tooltip formatter={(v) => (typeof v === 'number' ? v.toFixed(2) : String(v ?? ''))} />
+                    <Line type="monotone" dataKey="revenue" stroke="#0047AB" strokeWidth={2} dot={false} name="Net revenue" />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          ) : null}
+          {canSeeOrgReports(role) && expenseStackData.length > 0 && expenseBarKeys.length > 0 ? (
+            <div className="finance-chart-card">
+              <h3>Expense trend by category</h3>
+              <div style={{ width: '100%', height: 240 }}>
+                <ResponsiveContainer>
+                  <BarChart data={expenseStackData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                    <XAxis dataKey="day" tick={{ fontSize: 10 }} />
+                    <YAxis tick={{ fontSize: 10 }} />
+                    <Tooltip />
+                    <Legend wrapperStyle={{ fontSize: 11 }} />
+                    {expenseBarKeys.map((k, i) => (
+                      <Bar key={k} dataKey={k} stackId="a" fill={CHART_COLORS[i % CHART_COLORS.length]} name={k} />
+                    ))}
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          ) : null}
+          {canSeeOrgReports(role) && channelPieData.length > 0 ? (
+            <div className="finance-chart-card">
+              <h3>Payment channels (after reports refresh)</h3>
+              <div style={{ width: '100%', height: 220 }}>
+                <ResponsiveContainer>
+                  <PieChart>
+                    <Pie data={channelPieData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={78} label>
+                      {channelPieData.map((_, i) => (
+                        <Cell key={String(i)} fill={CHART_COLORS[i % CHART_COLORS.length]} />
+                      ))}
+                    </Pie>
+                    <Tooltip />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          ) : null}
+          <div className="finance-toolbar" style={{ marginTop: '0.65rem' }}>
+            <label>
+              Chart range (reports)
+              <div style={{ display: 'flex', gap: 6 }}>
+                <input type="date" value={repFrom} onChange={(e) => setRepFrom(e.target.value)} />
+                <input type="date" value={repTo} onChange={(e) => setRepTo(e.target.value)} />
+              </div>
+            </label>
+            <button
+              type="button"
+              className="secondary"
+              disabled={loading}
+              onClick={() => {
+                setLoading(true);
+                void loadDashboard().finally(() => setLoading(false));
+              }}
+            >
+              {loading ? 'Refreshing…' : 'Refresh KPIs'}
+            </button>
+          </div>
         </section>
       )}
 
@@ -520,8 +763,11 @@ export default function FinancePage() {
                   <th>Created</th>
                   <th>PNR</th>
                   <th>Amount</th>
-                  <th>Status</th>
+                  <th>Approval</th>
+                  <th>Payment</th>
+                  <th>Reason</th>
                   <th>Requested by</th>
+                  <th>Audit</th>
                   {canManageRefunds(role) ? <th>Actions</th> : null}
                 </tr>
               </thead>
@@ -534,7 +780,28 @@ export default function FinancePage() {
                       {String(r.amount)} {String(r.currency)}
                     </td>
                     <td>{String(r.status)}</td>
+                    <td>{String(r.payment_status || '—')}</td>
+                    <td style={{ maxWidth: 160, fontSize: '0.78rem' }}>{String(r.reason || '—')}</td>
                     <td>{String(r.requested_by_name || '—')}</td>
+                    <td>
+                      <button
+                        type="button"
+                        className="secondary"
+                        style={{ fontSize: '0.72rem' }}
+                        onClick={async () => {
+                          try {
+                            const d = await fetchJson<Record<string, unknown>>(
+                              `/api/finance/refund-requests/${String(r.id)}/audit-trail`
+                            );
+                            setRefundAudit(d);
+                          } catch (err) {
+                            toast.error((err as Error).message);
+                          }
+                        }}
+                      >
+                        Trail
+                      </button>
+                    </td>
                     {canManageRefunds(role) ? (
                       <td>
                         {String(r.status) === 'PENDING' ? (
@@ -566,7 +833,13 @@ export default function FinancePage() {
             <form onSubmit={submitExpense} style={{ display: 'grid', gap: '0.45rem', maxWidth: 520 }}>
               <label>
                 Category
-                <input value={expForm.category} onChange={(e) => setExpForm((f) => ({ ...f, category: e.target.value }))} />
+                <select value={expForm.category} onChange={(e) => setExpForm((f) => ({ ...f, category: e.target.value }))}>
+                  {EXPENSE_CATEGORIES.map((c) => (
+                    <option key={c} value={c}>
+                      {c.replace(/_/g, ' ')}
+                    </option>
+                  ))}
+                </select>
               </label>
               <label>
                 Amount
@@ -634,10 +907,162 @@ export default function FinancePage() {
         </>
       )}
 
+      {tab === 'treasury' && canSeeOrgReports(role) && (
+        <section className="module-card finance-erp-shell">
+          <h2>Treasury — AR / AP / bank</h2>
+          <p style={{ margin: '0 0 0.75rem', fontSize: '0.82rem', color: '#64748b' }}>
+            Accounts receivable from unpaid PNRs; accounts payable from vendor invoices; bank deposits tighten the cash
+            summary closing balance.
+          </p>
+          <div className="finance-toolbar">
+            <button type="button" onClick={() => void loadReportsPack()} disabled={loading}>
+              {loading ? 'Loading…' : 'Refresh treasury data'}
+            </button>
+          </div>
+          <h3 className="finance-section-title">Accounts receivable</h3>
+          <p style={{ margin: '0 0 0.35rem', fontSize: '0.8rem' }}>
+            Open exposure: <strong>{arList.reduce((s, r) => s + Number(r.total_amount || 0), 0).toFixed(2)}</strong> USD
+            (sample currency)
+          </p>
+          <div style={{ overflowX: 'auto' }}>
+            <table className="module-table">
+              <thead>
+                <tr>
+                  <th>PNR</th>
+                  <th>Amount</th>
+                  <th>Aging</th>
+                  <th>Bucket</th>
+                  <th>Agent</th>
+                </tr>
+              </thead>
+              <tbody>
+                {arList.slice(0, 40).map((b) => (
+                  <tr key={String(b.id)}>
+                    <td>{String(b.pnr)}</td>
+                    <td>
+                      {Number(b.total_amount).toFixed(2)} {String(b.currency)}
+                    </td>
+                    <td>{String(b.age_days)} d</td>
+                    <td>{String(b.aging_bucket)}</td>
+                    <td>{String(b.agent_name || '—')}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <h3 className="finance-section-title">Accounts payable (vendor)</h3>
+          <form
+            className="module-form-grid"
+            style={{ maxWidth: 520, marginBottom: '0.75rem' }}
+            onSubmit={async (e) => {
+              e.preventDefault();
+              try {
+                await fetchJson('/api/finance/vendor-invoices', {
+                  method: 'POST',
+                  body: JSON.stringify({
+                    vendorName: viVendor,
+                    amount: Number(viAmount),
+                    dueOn: viDue,
+                    category: viCat,
+                    currency: 'USD'
+                  })
+                });
+                toast.success('Vendor invoice recorded.');
+                setViVendor('');
+                setViAmount('');
+                void loadReportsPack();
+              } catch (err) {
+                toast.error((err as Error).message);
+              }
+            }}
+          >
+            <label>
+              Vendor
+              <input required value={viVendor} onChange={(e) => setViVendor(e.target.value)} />
+            </label>
+            <label>
+              Amount
+              <input required type="number" step="0.01" value={viAmount} onChange={(e) => setViAmount(e.target.value)} />
+            </label>
+            <label>
+              Due
+              <input type="date" required value={viDue} onChange={(e) => setViDue(e.target.value)} />
+            </label>
+            <label>
+              Category
+              <select value={viCat} onChange={(e) => setViCat(e.target.value)}>
+                {EXPENSE_CATEGORIES.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button type="submit">Add AP invoice</button>
+          </form>
+          <table className="module-table">
+            <thead>
+              <tr>
+                <th>Vendor</th>
+                <th>Due</th>
+                <th>Amount</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {apList.map((v) => (
+                <tr key={String(v.id)}>
+                  <td>{String(v.vendor_name)}</td>
+                  <td>{String(v.due_on)}</td>
+                  <td>
+                    {Number(v.amount).toFixed(2)} {String(v.currency)}
+                  </td>
+                  <td>{String(v.status)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <h3 className="finance-section-title">Bank deposits</h3>
+          <form
+            className="module-form-grid"
+            style={{ maxWidth: 420 }}
+            onSubmit={async (e) => {
+              e.preventDefault();
+              try {
+                await fetchJson('/api/finance/bank-deposits', {
+                  method: 'POST',
+                  body: JSON.stringify({ depositDate: depDate, amount: Number(depAmount), currency: 'USD' })
+                });
+                toast.success('Deposit recorded.');
+                setDepAmount('');
+                void loadReportsPack();
+              } catch (err) {
+                toast.error((err as Error).message);
+              }
+            }}
+          >
+            <label>
+              Date
+              <input type="date" value={depDate} onChange={(e) => setDepDate(e.target.value)} />
+            </label>
+            <label>
+              Amount
+              <input required type="number" step="0.01" value={depAmount} onChange={(e) => setDepAmount(e.target.value)} />
+            </label>
+            <button type="submit">Record deposit</button>
+          </form>
+          {cashSummary ? (
+            <pre style={{ fontSize: '0.78rem', background: '#f8fafc', padding: '0.65rem', borderRadius: 8 }}>
+              {JSON.stringify(cashSummary, null, 2)}
+            </pre>
+          ) : null}
+        </section>
+      )}
+
       {tab === 'reports' && (
-        <section className="module-card">
-          <h2>Reports</h2>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.45rem', alignItems: 'flex-end' }}>
+        <section className="module-card finance-erp-shell">
+          <h2>Management reports</h2>
+          <div className="finance-toolbar">
             <label>
               From
               <input type="date" value={repFrom} onChange={(e) => setRepFrom(e.target.value)} />
@@ -645,6 +1070,27 @@ export default function FinancePage() {
             <label>
               To
               <input type="date" value={repTo} onChange={(e) => setRepTo(e.target.value)} />
+            </label>
+            <label>
+              P&amp;L month
+              <input type="month" value={pnlMonth} onChange={(e) => setPnlMonth(e.target.value)} />
+            </label>
+            <label>
+              Runway cash on hand
+              <input value={runwayCash} onChange={(e) => setRunwayCash(e.target.value)} />
+            </label>
+            <label>
+              Flight UUID filter
+              <input
+                placeholder="Optional"
+                value={repFlightId}
+                onChange={(e) => setRepFlightId(e.target.value)}
+                style={{ minWidth: 220 }}
+              />
+            </label>
+            <label>
+              Route / flight # contains
+              <input value={repRouteFilter} onChange={(e) => setRepRouteFilter(e.target.value)} placeholder="e.g. HKG" />
             </label>
             <button type="button" onClick={() => void loadReportsPack()} disabled={loading}>
               Load / refresh
@@ -767,7 +1213,7 @@ export default function FinancePage() {
 
           {recon && (
             <>
-              <h3 style={{ fontSize: '0.95rem', marginTop: '0.75rem' }}>Sales reconciliation</h3>
+              <h3 className="finance-section-title">Sales reconciliation (summary)</h3>
               <p style={{ margin: 0, fontSize: '0.85rem' }}>
                 Booked itinerary fare: <strong>{Number(recon.bookedSalesItineraryFare).toFixed(2)}</strong> · Net
                 payments (processed in range): <strong>{Number(recon.netPaymentsProcessedInPeriod).toFixed(2)}</strong> ·
@@ -777,9 +1223,124 @@ export default function FinancePage() {
             </>
           )}
 
+          {reconDetail && Object.keys(reconDetail).length > 0 ? (
+            <div style={{ marginTop: '0.75rem' }}>
+              <h3 className="finance-section-title">Revenue reconciliation detail</h3>
+              <p style={{ fontSize: '0.84rem', margin: '0 0 0.35rem' }}>
+                Ticket sales (issued): <strong>{Number(reconDetail.ticketSales).toFixed(2)}</strong> · Booking payments
+                (net): <strong>{Number(reconDetail.bookingPayments).toFixed(2)}</strong> · Unpaid bookings:{' '}
+                <strong>{Number((reconDetail.unpaidBookings as { count?: number })?.count || 0)}</strong> /{' '}
+                <strong>{Number((reconDetail.unpaidBookings as { grossAmount?: number })?.grossAmount || 0).toFixed(2)}</strong>{' '}
+                · Online <strong>{Number(reconDetail.onlinePayments).toFixed(2)}</strong> · Cash{' '}
+                <strong>{Number(reconDetail.cashPayments).toFixed(2)}</strong> · Agent-channel{' '}
+                <strong>{Number(reconDetail.agentPayments).toFixed(2)}</strong>
+              </p>
+            </div>
+          ) : null}
+
+          {monthlyPnl && Object.keys(monthlyPnl).length > 0 ? (
+            <div style={{ marginTop: '0.75rem' }}>
+              <h3 className="finance-section-title">Monthly P&amp;L (cash view)</h3>
+              <p style={{ fontSize: '0.84rem', margin: 0 }}>
+                Month <strong>{String(monthlyPnl.month)}</strong> — Revenue <strong>{Number(monthlyPnl.revenue).toFixed(2)}</strong>{' '}
+                · Refunds <strong>{Number(monthlyPnl.refunds).toFixed(2)}</strong> · Expenses{' '}
+                <strong>{Number(monthlyPnl.expenses).toFixed(2)}</strong> · Net operating cash{' '}
+                <strong>{Number(monthlyPnl.netOperatingCash).toFixed(2)}</strong>
+              </p>
+            </div>
+          ) : null}
+
+          {cashRunway && Object.keys(cashRunway).length > 0 ? (
+            <p style={{ fontSize: '0.84rem', marginTop: '0.5rem' }}>
+              Cash runway (est.): <strong>{cashRunway.runwayDays != null ? Number(cashRunway.runwayDays).toFixed(1) : '—'}</strong>{' '}
+              days at avg burn <strong>{Number(cashRunway.averageDailyCashBurn || 0).toFixed(2)}</strong>/day —{' '}
+              {String(cashRunway.note || '')}
+            </p>
+          ) : null}
+
+          {routeProfit.length > 0 ? (
+            <>
+              <h3 className="finance-section-title">Route profitability</h3>
+              <div style={{ overflowX: 'auto' }}>
+                <table className="module-table">
+                  <thead>
+                    <tr>
+                      <th>Route</th>
+                      <th>Flights</th>
+                      <th>Revenue</th>
+                      <th>Cost</th>
+                      <th>Margin</th>
+                      <th>Pax</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {routeProfit.map((row) => (
+                      <tr key={String((row as { route: string }).route)}>
+                        <td>{String((row as { route: string }).route)}</td>
+                        <td>{String((row as { flight_count: number }).flight_count)}</td>
+                        <td>{Number((row as { route_revenue: string }).route_revenue).toFixed(2)}</td>
+                        <td>{Number((row as { route_cost_estimate: string }).route_cost_estimate).toFixed(2)}</td>
+                        <td>{Number((row as { route_margin: number }).route_margin).toFixed(2)}</td>
+                        <td>{String((row as { passenger_count: number }).passenger_count)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {routeProfit.length > 1 ? (
+                <div className="finance-chart-card">
+                  <h3>Route margin (top)</h3>
+                  <div style={{ width: '100%', height: 220 }}>
+                    <ResponsiveContainer>
+                      <BarChart data={routeProfit.slice(0, 12).map((r) => ({ name: String((r as { route: string }).route), margin: Number((r as { route_margin: number }).route_margin) }))}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                        <XAxis dataKey="name" tick={{ fontSize: 9 }} interval={0} angle={-25} textAnchor="end" height={70} />
+                        <YAxis tick={{ fontSize: 10 }} />
+                        <Tooltip />
+                        <Bar dataKey="margin" fill="#0047AB" name="Margin" />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+              ) : null}
+            </>
+          ) : null}
+
+          {agentLedger.length > 0 ? (
+            <>
+              <h3 className="finance-section-title">Agent ledger</h3>
+              <table className="module-table">
+                <thead>
+                  <tr>
+                    <th>Agent</th>
+                    <th>Bookings</th>
+                    <th>Gross</th>
+                    <th>Net paid</th>
+                    <th>Outstanding</th>
+                    <th>Comm. %</th>
+                    <th>Comm. est.</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {agentLedger.map((row) => (
+                    <tr key={String((row as { agent_id: string }).agent_id)}>
+                      <td>{String((row as { agent_name: string }).agent_name)}</td>
+                      <td>{String((row as { booking_count: number }).booking_count)}</td>
+                      <td>{Number((row as { booked_gross: string }).booked_gross).toFixed(2)}</td>
+                      <td>{Number((row as { net_payments: string }).net_payments).toFixed(2)}</td>
+                      <td>{Number((row as { outstanding_balance: string }).outstanding_balance).toFixed(2)}</td>
+                      <td>{Number((row as { commission_pct: string }).commission_pct).toFixed(2)}</td>
+                      <td>{Number((row as { commission_estimate: number }).commission_estimate).toFixed(2)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </>
+          ) : null}
+
           {flightProfit.length > 0 && (
             <>
-              <h3 style={{ fontSize: '0.95rem', marginTop: '0.75rem' }}>Flight profitability</h3>
+              <h3 className="finance-section-title">Flight profitability</h3>
               <table className="module-table">
                 <thead>
                   <tr>
@@ -789,6 +1350,9 @@ export default function FinancePage() {
                     <th>Revenue</th>
                     <th>Direct exp.</th>
                     <th>Margin</th>
+                    <th>Pax</th>
+                    <th>LF</th>
+                    <th>Yield/pax</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -802,6 +1366,17 @@ export default function FinancePage() {
                       <td>{Number(f.revenue_from_bookings).toFixed(2)}</td>
                       <td>{Number(f.direct_expenses).toFixed(2)}</td>
                       <td>{Number(f.estimated_margin).toFixed(2)}</td>
+                      <td>{String(f.passenger_count ?? '—')}</td>
+                      <td>
+                        {f.load_factor != null && Number.isFinite(Number(f.load_factor))
+                          ? `${(Number(f.load_factor) * 100).toFixed(0)}%`
+                          : '—'}
+                      </td>
+                      <td>
+                        {f.yield_per_passenger != null && Number.isFinite(Number(f.yield_per_passenger))
+                          ? Number(f.yield_per_passenger).toFixed(2)
+                          : '—'}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -810,6 +1385,38 @@ export default function FinancePage() {
           )}
         </section>
       )}
+
+      {refundAudit ? (
+        <div
+          role="dialog"
+          aria-modal
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(15,23,42,0.45)',
+            zIndex: 80,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '1rem'
+          }}
+          onMouseDown={() => setRefundAudit(null)}
+        >
+          <div
+            className="module-card"
+            style={{ maxWidth: 720, width: '100%', maxHeight: '85vh', overflow: 'auto' }}
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <h3 style={{ marginTop: 0 }}>Refund audit trail</h3>
+            <pre style={{ fontSize: '0.72rem', background: '#f8fafc', padding: '0.5rem', borderRadius: 8 }}>
+              {JSON.stringify(refundAudit, null, 2)}
+            </pre>
+            <button type="button" className="secondary" onClick={() => setRefundAudit(null)}>
+              Close
+            </button>
+          </div>
+        </div>
+      ) : null}
     </main>
   );
 }

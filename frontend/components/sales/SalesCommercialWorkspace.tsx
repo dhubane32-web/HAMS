@@ -233,9 +233,9 @@ export default function SalesCommercialWorkspace({
         </div>
       )}
 
-      {sub === 'kpi' && kpi && kpi.routeAnalytics && typeof kpi.routeAnalytics === 'object' && (
+      {sub === 'kpi' && kpi && kpi.routeAnalytics != null && typeof kpi.routeAnalytics === 'object' ? (
         <RouteAnalyticsPanel analytics={kpi.routeAnalytics as Record<string, unknown>} title="Route analytics (MTD departures)" />
-      )}
+      ) : null}
 
       {sub === 'rm' && rm && (
         <div style={{ fontSize: '0.86rem', color: '#334155' }}>
@@ -258,9 +258,9 @@ export default function SalesCommercialWorkspace({
               Recalculate load-factor buckets
             </button>
           </p>
-          {rm.loadFactor &&
-            typeof rm.loadFactor === 'object' &&
-            (rm.loadFactor as { perFlightLoadFactor?: unknown }).perFlightLoadFactor != null && (
+          {rm.loadFactor != null &&
+          typeof rm.loadFactor === 'object' &&
+          (rm.loadFactor as { perFlightLoadFactor?: unknown }).perFlightLoadFactor != null ? (
               <div style={{ marginBottom: '0.75rem' }}>
                 <h4 style={{ margin: '0 0 0.35rem', fontSize: '0.9rem' }}>
                   Load factor ({String((rm.loadFactor as { departureFrom?: string }).departureFrom || '').slice(0, 10)} →{' '}
@@ -304,13 +304,13 @@ export default function SalesCommercialWorkspace({
                   </table>
                 </div>
               </div>
-            )}
-          {rm.routeAnalytics && typeof rm.routeAnalytics === 'object' && (
+            ) : null}
+          {rm.routeAnalytics != null && typeof rm.routeAnalytics === 'object' ? (
             <RouteAnalyticsPanel
               analytics={rm.routeAnalytics as Record<string, unknown>}
               title="Route analytics (summary date range)"
             />
-          )}
+          ) : null}
           <pre style={{ maxHeight: 280, overflow: 'auto', background: '#f8fafc', padding: '0.75rem', fontSize: '0.72rem' }}>
             {JSON.stringify(
               {
