@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
 import type { UserRole } from '@/lib/roles';
 import { getPublicApiBaseUrl } from '@/lib/api-base';
+import { getClientAuthToken } from '@/lib/auth-session';
 import {
   formatLoadFactorPercent,
   formatPercent1Decimal,
@@ -40,7 +41,7 @@ export default function SalesCommercialWorkspace({
 
   const loadKpi = useCallback(async () => {
     if (!canFin) return;
-    const d = await fetchJson<Record<string, unknown>>('/api/sales/commercial-kpi-dashboard');
+    const d = await fetchJson<Record<string, unknown>>('/api/sales/commercial/kpis');
     setKpi(d);
   }, [fetchJson, canFin]);
 
@@ -496,7 +497,7 @@ export default function SalesCommercialWorkspace({
           <button
             type="button"
             onClick={async () => {
-              const token = typeof window !== 'undefined' ? localStorage.getItem('hams_token') : '';
+              const token = getClientAuthToken() || '';
               const from = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
               const to = new Date().toISOString().slice(0, 10);
               const base = getPublicApiBaseUrl();

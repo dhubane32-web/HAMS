@@ -4,6 +4,7 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 import type { UserRole } from '@/lib/roles';
 import { getPublicApiBaseUrl } from '@/lib/api-base';
+import { getClientAuthToken } from '@/lib/auth-session';
 import SalesCommercialWorkspace from '@/components/sales/SalesCommercialWorkspace';
 import {
   formatPercent1Decimal,
@@ -27,7 +28,7 @@ type Tab =
 const LEAD_STATUSES = ['NEW', 'CONTACTED', 'QUALIFIED', 'PROPOSAL', 'NEGOTIATION', 'WON', 'LOST'] as const;
 
 function getToken() {
-  return typeof window !== 'undefined' ? localStorage.getItem('hams_token') : null;
+  return getClientAuthToken();
 }
 
 function roleFromToken(): UserRole | null {
@@ -48,6 +49,30 @@ function canEditSalesContent(role: UserRole | null) {
 function canViewMarketingDash(role: UserRole | null) {
   if (!role) return false;
   return ['admin', 'super_admin', 'sales_manager', 'finance'].includes(role);
+}
+
+/** Merge RequestInit headers then force Bearer auth last (same pattern as bookings/check-in). */
+function buildAuthHeaders(token: string, init?: RequestInit): Headers {
+  const headers = new Headers();
+  const ih = init?.headers;
+  if (ih) {
+    if (ih instanceof Headers) {
+      ih.forEach((value, key) => headers.set(key, value));
+    } else if (Array.isArray(ih)) {
+      for (const [k, v] of ih) {
+        if (v !== undefined && v !== null) headers.set(k, String(v));
+      }
+    } else {
+      for (const [k, v] of Object.entries(ih)) {
+        if (v !== undefined && v !== null) headers.set(k, String(v));
+      }
+    }
+  }
+  if (init?.body && !headers.has('Content-Type')) {
+    headers.set('Content-Type', 'application/json');
+  }
+  headers.set('Authorization', `Bearer ${token}`);
+  return headers;
 }
 
 export default function SalesPage() {
@@ -141,11 +166,7 @@ export default function SalesPage() {
     if (!token) throw new Error('Please login first from /login.');
     const res = await fetch(`${API_BASE_URL}${path}`, {
       ...init,
-      headers: {
-        ...(init?.body ? { 'Content-Type': 'application/json' } : {}),
-        ...(init?.headers || {}),
-        Authorization: `Bearer ${token}`
-      }
+      headers: buildAuthHeaders(token, init)
     });
     const text = await res.text();
     let body: { message?: string } & Partial<T> = {};

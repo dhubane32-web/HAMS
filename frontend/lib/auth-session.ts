@@ -166,3 +166,13 @@ export function hydrateSessionFromCookie(): boolean {
   }
   return false;
 }
+
+/**
+ * JWT for `Authorization: Bearer …` on API calls. Mirrors `localStorage.getItem('hams_token')` after
+ * {@link hydrateSessionFromCookie} so cookie-only sessions (middleware) still send a valid token.
+ */
+export function getClientAuthToken(): string | null {
+  if (typeof window === 'undefined') return null;
+  hydrateSessionFromCookie();
+  return localStorage.getItem('hams_token');
+}
