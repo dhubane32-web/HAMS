@@ -152,5 +152,5 @@ export async function runBoardingScan(client, { scan, flightId, gateAtScan, stri
     [userId, 'BOARDING_SCAN_BOARDED', 'checkins', checkinRow.id, JSON.stringify({ scan: raw, gateAtScan: gateAtScan || null })]
   );
 
-  return { ok: true, checkinId: checkinRow.id, scan: raw };
+  return { ok: true, checkinId: checkinRow.id, flightId: checkinRow.flight_id, scan: raw };
 }

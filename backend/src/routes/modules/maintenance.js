@@ -1,6 +1,7 @@
 import express from 'express';
 import { pool } from '../../config/db.js';
 import { requireAuth, requireRoles } from '../../middleware/auth.js';
+import { recordOccFlightEvent } from '../../services/occFlightEvents.js';
 
 const router = express.Router();
 
@@ -79,6 +80,22 @@ router.patch('/defects/:defectId/close', requireAuth, requireRoles('admin', 'mai
 
     if (releaseAircraft === true) {
       await client.query(`UPDATE aircraft SET release_status = 'RELEASED' WHERE id = $1`, [defect.aircraft_id]);
+      const fl = await client.query(
+        `SELECT id FROM flights
+         WHERE aircraft_id = $1::uuid
+           AND UPPER(TRIM(status::text)) NOT IN ('CANCELLED','ARRIVED','LANDED')
+           AND departure_time > NOW() - interval '3 days'`,
+        [defect.aircraft_id]
+      );
+      for (const fr of fl.rows) {
+        await recordOccFlightEvent(client, {
+          flightId: fr.id,
+          eventType: 'MAINT_RELEASE',
+          sourceSystem: 'maintenance',
+          userId: req.user.userId,
+          payload: { defectId: defect.id, aircraftId: defect.aircraft_id }
+        });
+      }
     }
 
     await client.query(
@@ -170,6 +187,30 @@ router.patch('/aircraft/:aircraftId/release-status', requireAuth, requireRoles('
     );
     if (!result.rows[0]) {
       return res.status(404).json({ message: 'Aircraft not found.' });
+    }
+    if (normalized === 'RELEASED') {
+      try {
+        const fl = await pool.query(
+          `SELECT id FROM flights
+           WHERE aircraft_id = $1::uuid
+             AND UPPER(TRIM(status::text)) NOT IN ('CANCELLED','ARRIVED','LANDED')
+             AND departure_time > NOW() - interval '3 days'`,
+          [aircraftId]
+        );
+        for (const fr of fl.rows) {
+          await recordOccFlightEvent(pool, {
+            flightId: fr.id,
+            eventType: 'AIRCRAFT_RELEASE_STATUS',
+            sourceSystem: 'maintenance',
+            userId: req.user.userId,
+            payload: { aircraftId, releaseStatus: normalized }
+          });
+        }
+      } catch (e) {
+        if (process.env.NODE_ENV !== 'production') {
+          console.warn('[maintenance] OCC flight event:', e?.message || e);
+        }
+      }
     }
     return res.status(200).json({ aircraft: result.rows[0] });
   } catch (error) {

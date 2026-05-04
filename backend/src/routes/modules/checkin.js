@@ -10,6 +10,7 @@ import {
 } from '../../services/checkinBoardingService.js';
 import { buildBoardingPassPdfBuffer, buildBagTagPdfBuffer, loadBagTagPdfContext } from '../../services/checkinDocuments.js';
 import { assertGateMatchesFlight, runBoardingScan } from '../../services/checkinBoardingWorkflow.js';
+import { recordOccFlightEvent } from '../../services/occFlightEvents.js';
 import { isFlightOpenForPassengerCheckin } from '../../lib/flightOccStatus.js';
 import { ROLES_CHECKIN_DESK, ROLES_CHECKIN_OPS } from '../../lib/airlineRbac.js';
 
@@ -1188,6 +1189,15 @@ router.post(
         return res.status(result.status).json({ message: result.message });
       }
       await client.query('COMMIT');
+      if (result.flightId) {
+        await recordOccFlightEvent(pool, {
+          flightId: result.flightId,
+          eventType: 'PASSENGER_BOARDED',
+          sourceSystem: 'checkin',
+          userId: req.user.userId,
+          payload: { checkinId: result.checkinId, scan: result.scan }
+        });
+      }
       const boardingPass = await buildBoardingPassView(pool, result.checkinId);
       return res.status(200).json({ message: 'Boarded.', boardingPass });
     } catch (error) {
@@ -1442,6 +1452,14 @@ async function processCheckIn(req, res) {
     );
 
     await client.query('COMMIT');
+
+    await recordOccFlightEvent(pool, {
+      flightId,
+      eventType: 'PASSENGER_CHECKED_IN',
+      sourceSystem: 'checkin',
+      userId: req.user.userId,
+      payload: { checkinId, pnr: booking.pnr, passengerId }
+    });
 
     const bpView = await buildBoardingPassView(pool, checkinId);
     const boardingPass = bpView

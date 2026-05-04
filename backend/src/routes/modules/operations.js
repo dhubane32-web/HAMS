@@ -13,6 +13,9 @@ import {
   deleteDutyLogForAssignment,
   deleteDutyLogsForFlight
 } from '../../services/crewCompliance.js';
+import { recordOccFlightEvent, applyStatusWithTracking } from '../../services/occFlightEvents.js';
+import { logFinanceTransaction } from '../../services/financeLedger.js';
+import { registerOccRoutes } from './occ.js';
 
 const router = express.Router();
 
@@ -750,15 +753,24 @@ router.patch('/flights/:flightId/status', requireAuth, requireRoles(...ROLES_OPS
     if (!transition.ok) {
       return res.status(400).json({ message: transition.message });
     }
-    const upd = await pool.query(
-      `UPDATE flights SET status = $2 WHERE id = $1 RETURNING id, flight_number, status`,
-      [flightId, next]
-    );
+    const etaBody = req.body?.etaCurrentAt;
+    const upd = await applyStatusWithTracking(pool, {
+      flightId,
+      nextStatus: next,
+      etaCurrentAt: etaBody
+    });
     await pool.query(
       `INSERT INTO audit_logs (user_id, action, entity, entity_id, metadata)
        VALUES ($1, $2, $3, $4, $5)`,
-      [req.user.userId, 'FLIGHT_STATUS_SET', 'flights', flightId, JSON.stringify({ status: next })]
+      [req.user.userId, 'FLIGHT_STATUS_SET', 'flights', flightId, JSON.stringify({ status: next, etaCurrentAt: etaBody || null })]
     );
+    await recordOccFlightEvent(pool, {
+      flightId,
+      eventType: 'FLIGHT_STATUS',
+      sourceSystem: 'occ',
+      userId: req.user.userId,
+      payload: { status: next, etaCurrentAt: etaBody || null }
+    });
     return res.status(200).json({ flight: upd.rows[0] });
   } catch (error) {
     return res.status(500).json({ message: 'Failed to update flight status.', error: error.message });
@@ -804,6 +816,13 @@ router.post('/flights/:flightId/cancel', requireAuth, requireRoles(...ROLES_OPS_
        VALUES ($1, $2, $3, $4, $5)`,
       [req.user.userId, 'FLIGHT_CANCELLED', 'flights', flightId, JSON.stringify({ reason: r.slice(0, 200) })]
     );
+    await recordOccFlightEvent(client, {
+      flightId,
+      eventType: 'FLIGHT_CANCELLED',
+      sourceSystem: 'occ',
+      userId: req.user.userId,
+      payload: { reason: r.slice(0, 500) }
+    });
     await client.query('COMMIT');
     return res.status(200).json({ flight: upd.rows[0] });
   } catch (error) {
@@ -892,6 +911,13 @@ router.post('/flights/:flightId/assign-aircraft', requireAuth, requireRoles(...R
     );
 
     await client.query('COMMIT');
+    await recordOccFlightEvent(pool, {
+      flightId,
+      eventType: 'AIRCRAFT_ASSIGNED',
+      sourceSystem: 'maintenance',
+      userId: req.user.userId,
+      payload: { aircraftId, tailNumber: aircraft.tail_number }
+    });
     return res.status(200).json({
       message: 'Aircraft assigned successfully.',
       flight
@@ -990,6 +1016,13 @@ router.post('/flights/:flightId/assign-crew', requireAuth, requireRoles(...ROLES
     );
 
     await client.query('COMMIT');
+    await recordOccFlightEvent(pool, {
+      flightId,
+      eventType: 'CREW_ASSIGNED',
+      sourceSystem: 'crew',
+      userId: req.user.userId,
+      payload: { crewUserId, dutyRole, assignmentId: assignment.rows[0].id }
+    });
     return res.status(200).json({
       message: 'Crew assignment saved.',
       assignment: assignment.rows[0]
@@ -1026,6 +1059,13 @@ router.delete(
          VALUES ($1, $2, $3, $4, $5)`,
         [req.user.userId, 'CREW_UNASSIGNED', 'flights', flightId, JSON.stringify({ assignmentId })]
       );
+      await recordOccFlightEvent(pool, {
+        flightId,
+        eventType: 'CREW_UNASSIGNED',
+        sourceSystem: 'crew',
+        userId: req.user.userId,
+        payload: { assignmentId, crewUserId: removed.crew_user_id }
+      });
       return res.status(204).send();
     } catch (error) {
       return res.status(500).json({ message: 'Failed to remove crew assignment.', error: error.message });
@@ -1074,13 +1114,7 @@ router.post('/flights/:flightId/dispatch', requireAuth, requireRoles(...ROLES_OP
       return res.status(400).json({ message: dispatchTransition.message });
     }
 
-    const flightResult = await client.query(
-      `UPDATE flights
-       SET status = $1
-       WHERE id = $2
-       RETURNING id, flight_number, status`,
-      [status, flightId]
-    );
+    const flightResult = await applyStatusWithTracking(client, { flightId, nextStatus: status, etaCurrentAt: null });
     const flight = flightResult.rows[0];
 
     const dispatchResult = await client.query(
@@ -1103,6 +1137,13 @@ router.post('/flights/:flightId/dispatch', requireAuth, requireRoles(...ROLES_OP
     );
 
     await client.query('COMMIT');
+    await recordOccFlightEvent(pool, {
+      flightId,
+      eventType: 'DISPATCH_STATUS',
+      sourceSystem: 'occ',
+      userId: req.user.userId,
+      payload: { status, remarks: remarks || null }
+    });
     return res.status(200).json({
       message: 'Dispatch log created.',
       dispatch: dispatchResult.rows[0],
@@ -1201,6 +1242,13 @@ router.post('/flights/:flightId/dispatch-release', requireAuth, requireRoles(...
         JSON.stringify({ checklist: checklistResult.checklist, nextStatus })
       ]
     );
+    await recordOccFlightEvent(client, {
+      flightId,
+      eventType: 'DISPATCH_RELEASE',
+      sourceSystem: 'occ',
+      userId: req.user.userId,
+      payload: { nextStatus, checklist: checklistResult.checklist }
+    });
     await client.query('COMMIT');
     return res.status(200).json({
       flight: upd.rows[0],
@@ -1222,7 +1270,7 @@ router.post('/flights/:flightId/delays', requireAuth, requireRoles(...ROLES_OPS_
   if (!isUuid(flightId)) {
     return res.status(400).json({ message: 'Invalid flight id.' });
   }
-  const { delayMinutes, reason, revisedDepartureTime, operationalNotes } = req.body;
+  const { delayMinutes, reason, revisedDepartureTime, operationalNotes, delayCode, costImpactUsd } = req.body;
   const minutes = Number(delayMinutes);
   const notesTrim =
     operationalNotes != null ? String(operationalNotes).trim().slice(0, 4000) : null;
@@ -1230,6 +1278,9 @@ router.post('/flights/:flightId/delays', requireAuth, requireRoles(...ROLES_OPS_
     revisedDepartureTime != null && String(revisedDepartureTime).trim()
       ? new Date(String(revisedDepartureTime)).toISOString()
       : null;
+  const delayCodeNorm = delayCode != null ? String(delayCode).trim().slice(0, 16).toUpperCase() : null;
+  let costImpact =
+    costImpactUsd != null && Number.isFinite(Number(costImpactUsd)) ? Number(costImpactUsd) : null;
 
   if (!Number.isInteger(minutes) || minutes <= 0 || !reason || String(reason).trim().length < 3) {
     return res.status(400).json({ message: 'delayMinutes (positive integer) and reason (min 3 chars) are required.' });
@@ -1250,6 +1301,15 @@ router.post('/flights/:flightId/delays', requireAuth, requireRoles(...ROLES_OPS_
     if (normalizeStatus(cur.rows[0].status) === 'CANCELLED') {
       await client.query('ROLLBACK');
       return res.status(400).json({ message: 'Cannot delay a cancelled flight.' });
+    }
+
+    if (delayCodeNorm && costImpact == null) {
+      try {
+        const dc = await client.query(`SELECT default_cost_usd FROM occ_delay_code_ref WHERE code = $1`, [delayCodeNorm]);
+        if (dc.rows[0]) costImpact = Number(dc.rows[0].default_cost_usd);
+      } catch {
+        /* ref table optional until migration */
+      }
     }
 
     let newDepIso = null;
@@ -1279,28 +1339,81 @@ router.post('/flights/:flightId/delays', requireAuth, requireRoles(...ROLES_OPS_
     let delay;
     try {
       delay = await client.query(
-        `INSERT INTO flight_delays (flight_id, delay_minutes, reason, reported_by, revised_departure, operational_notes)
-         VALUES ($1, $2, $3, $4, $5, $6)
-         RETURNING id, flight_id, delay_minutes, reason, created_at, revised_departure, operational_notes`,
+        `INSERT INTO flight_delays (flight_id, delay_minutes, reason, reported_by, revised_departure, operational_notes, delay_code, cost_impact_usd)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         RETURNING id, flight_id, delay_minutes, reason, created_at, revised_departure, operational_notes, delay_code, cost_impact_usd`,
         [
           flightId,
           minutes,
           String(reason).trim().slice(0, 2000),
           req.user.userId,
           newDepIso,
-          notesTrim
+          notesTrim,
+          delayCodeNorm,
+          costImpact
         ]
       );
     } catch (e) {
       if (e && e.code === '42703') {
-        delay = await client.query(
-          `INSERT INTO flight_delays (flight_id, delay_minutes, reason, reported_by)
-           VALUES ($1, $2, $3, $4)
-           RETURNING id, flight_id, delay_minutes, reason, created_at`,
-          [flightId, minutes, String(reason).trim().slice(0, 2000), req.user.userId]
-        );
+        try {
+          delay = await client.query(
+            `INSERT INTO flight_delays (flight_id, delay_minutes, reason, reported_by, revised_departure, operational_notes)
+             VALUES ($1, $2, $3, $4, $5, $6)
+             RETURNING id, flight_id, delay_minutes, reason, created_at, revised_departure, operational_notes`,
+            [
+              flightId,
+              minutes,
+              String(reason).trim().slice(0, 2000),
+              req.user.userId,
+              newDepIso,
+              notesTrim
+            ]
+          );
+        } catch (e2) {
+          if (e2 && e2.code === '42703') {
+            delay = await client.query(
+              `INSERT INTO flight_delays (flight_id, delay_minutes, reason, reported_by)
+               VALUES ($1, $2, $3, $4)
+               RETURNING id, flight_id, delay_minutes, reason, created_at`,
+              [flightId, minutes, String(reason).trim().slice(0, 2000), req.user.userId]
+            );
+          } else {
+            throw e2;
+          }
+        }
       } else {
         throw e;
+      }
+    }
+
+    await recordOccFlightEvent(client, {
+      flightId,
+      eventType: 'DELAY',
+      sourceSystem: 'occ',
+      userId: req.user.userId,
+      payload: {
+        delayId: delay.rows[0].id,
+        delayMinutes: minutes,
+        delayCode: delayCodeNorm,
+        costImpactUsd: costImpact,
+        revisedDepartureTime: newDepIso
+      }
+    });
+
+    if (costImpact != null && Number.isFinite(costImpact) && costImpact > 0) {
+      try {
+        await logFinanceTransaction(client, {
+          txnType: 'OCC_DELAY_COST_EST',
+          amount: costImpact,
+          currency: 'USD',
+          description: `Estimated delay cost (${delayCodeNorm || 'N/A'}) — ${minutes} min`,
+          metadata: { flightId, delayId: delay.rows[0].id, delayCode: delayCodeNorm },
+          userId: req.user.userId
+        });
+      } catch (finErr) {
+        if (process.env.NODE_ENV !== 'production') {
+          console.warn('[operations] OCC_DELAY_COST_EST ledger:', finErr?.message || finErr);
+        }
       }
     }
 
@@ -1316,7 +1429,9 @@ router.post('/flights/:flightId/delays', requireAuth, requireRoles(...ROLES_OPS_
           delayMinutes: minutes,
           reason,
           revisedDepartureTime: newDepIso,
-          operationalNotes: notesTrim
+          operationalNotes: notesTrim,
+          delayCode: delayCodeNorm,
+          costImpactUsd: costImpact
         })
       ]
     );
@@ -1346,8 +1461,41 @@ router.get(
     }
 
     try {
-      const flightResult = await pool.query(
-        `SELECT
+      let flightResult;
+      try {
+        flightResult = await pool.query(
+          `SELECT
+        f.id,
+        f.flight_number,
+        f.departure_airport,
+        f.arrival_airport,
+        f.departure_time,
+        f.arrival_time,
+        f.gate,
+        f.boarding_time,
+        f.status,
+        f.route_id,
+        f.cancellation_reason,
+        f.cancelled_at,
+        f.aircraft_id,
+        f.actual_off_block_at,
+        f.actual_airborne_at,
+        f.actual_landed_at,
+        f.eta_current_at,
+        a.tail_number,
+        a.model,
+        a.release_status AS aircraft_release_status,
+        r.label AS route_label
+      FROM flights f
+      LEFT JOIN aircraft a ON a.id = f.aircraft_id
+      LEFT JOIN ops_routes r ON r.id = f.route_id
+      WHERE f.id = $1`,
+          [flightId]
+        );
+      } catch (e) {
+        if (e && e.code === '42703') {
+          flightResult = await pool.query(
+            `SELECT
         f.id,
         f.flight_number,
         f.departure_airport,
@@ -1369,8 +1517,12 @@ router.get(
       LEFT JOIN aircraft a ON a.id = f.aircraft_id
       LEFT JOIN ops_routes r ON r.id = f.route_id
       WHERE f.id = $1`,
-        [flightId]
-      );
+            [flightId]
+          );
+        } else {
+          throw e;
+        }
+      }
       const flight = flightResult.rows[0];
       if (!flight) {
         return res.status(404).json({ message: 'Flight not found.' });
@@ -1411,7 +1563,7 @@ router.get(
       let delays;
       try {
         delays = await pool.query(
-          `SELECT id, delay_minutes, reason, created_at, revised_departure, operational_notes
+          `SELECT id, delay_minutes, reason, created_at, revised_departure, operational_notes, delay_code, cost_impact_usd
            FROM flight_delays
            WHERE flight_id = $1
            ORDER BY created_at DESC`,
@@ -1419,13 +1571,28 @@ router.get(
         );
       } catch (e) {
         if (e && e.code === '42703') {
-          delays = await pool.query(
-            `SELECT id, delay_minutes, reason, created_at, NULL::timestamptz AS revised_departure, NULL::text AS operational_notes
-             FROM flight_delays
-             WHERE flight_id = $1
-             ORDER BY created_at DESC`,
-            [flightId]
-          );
+          try {
+            delays = await pool.query(
+              `SELECT id, delay_minutes, reason, created_at, revised_departure, operational_notes
+               FROM flight_delays
+               WHERE flight_id = $1
+               ORDER BY created_at DESC`,
+              [flightId]
+            );
+          } catch (e2) {
+            if (e2 && e2.code === '42703') {
+              delays = await pool.query(
+                `SELECT id, delay_minutes, reason, created_at, NULL::timestamptz AS revised_departure, NULL::text AS operational_notes,
+                        NULL::varchar AS delay_code, NULL::numeric AS cost_impact_usd
+                 FROM flight_delays
+                 WHERE flight_id = $1
+                 ORDER BY created_at DESC`,
+                [flightId]
+              );
+            } else {
+              throw e2;
+            }
+          }
         } else {
           throw e;
         }
@@ -1613,5 +1780,7 @@ router.get(
     }
   }
 );
+
+registerOccRoutes(router);
 
 export default router;

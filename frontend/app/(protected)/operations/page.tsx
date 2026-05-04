@@ -5,6 +5,7 @@ import Link from 'next/link';
 import toast from 'react-hot-toast';
 import { getPublicApiBaseUrl } from '@/lib/api-base';
 import './operations-erp.css';
+import { OperationsOccHub } from './OperationsOccHub';
 
 const API_BASE_URL = getPublicApiBaseUrl();
 
@@ -240,7 +241,7 @@ type ScheduleFlightEditForm = {
 
 export default function OperationsPage() {
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
-  const [tab, setTab] = useState<'board' | 'routes' | 'schedule' | 'control'>('board');
+  const [tab, setTab] = useState<'board' | 'routes' | 'schedule' | 'control' | 'occ'>('board');
 
   const [date, setDate] = useState(today);
   const [boardViewDate, setBoardViewDate] = useState(today);
@@ -1053,12 +1054,13 @@ export default function OperationsPage() {
           delay capture with revised times, operational alerts, and audit timeline per flight.
         </p>
         <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
-          {(['board', 'routes', 'schedule', 'control'] as const).map((t) => (
+          {(['board', 'routes', 'schedule', 'control', 'occ'] as const).map((t) => (
             <button key={t} type="button" className={tab === t ? '' : 'secondary'} onClick={() => setTab(t)}>
               {t === 'board' && 'Operations board'}
               {t === 'routes' && 'Routes'}
               {t === 'schedule' && 'Schedule flight'}
               {t === 'control' && 'Flight control'}
+              {t === 'occ' && 'OCC hub'}
             </button>
           ))}
         </div>
@@ -2322,6 +2324,8 @@ export default function OperationsPage() {
           </aside>
         </div>
       ) : null}
+
+      {tab === 'occ' ? <OperationsOccHub /> : null}
 
       {tableDispatchModal ? (
         <div

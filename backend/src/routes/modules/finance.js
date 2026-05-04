@@ -5,6 +5,7 @@ import { userHasAnyRole } from '../../lib/roles.js';
 import { ROLES_FINANCE_ORG, ROLES_REFUND_QUEUE, ROLES_REFUND_REQUEST } from '../../lib/airlineRbac.js';
 import { logFinanceTransaction } from '../../services/financeLedger.js';
 import { syncBookingPaymentStatus } from '../../services/bookingPaymentSync.js';
+import { recordOccFlightEvent } from '../../services/occFlightEvents.js';
 
 const router = express.Router();
 
@@ -502,6 +503,31 @@ router.post(
       );
 
       await client.query('COMMIT');
+
+      try {
+        const legs = await pool.query(`SELECT flight_id FROM booking_flights WHERE booking_id = $1`, [payment.booking_id]);
+        for (const leg of legs.rows) {
+          if (!leg.flight_id) continue;
+          await recordOccFlightEvent(pool, {
+            flightId: leg.flight_id,
+            eventType: 'FINANCE_REFUND',
+            sourceSystem: 'finance',
+            userId: req.user.userId,
+            payload: {
+              refundId: refundResult.rows[0].id,
+              refundAmount: amount,
+              currency: payment.currency,
+              bookingId: payment.booking_id,
+              paymentId: payment.id
+            }
+          });
+        }
+      } catch (occErr) {
+        if (process.env.NODE_ENV !== 'production') {
+          console.warn('[finance] OCC refund event:', occErr?.message || occErr);
+        }
+      }
+
       return res.status(200).json({
         message: 'Refund approved and processed.',
         refund: refundResult.rows[0],

@@ -26,6 +26,7 @@ import {
   syncCrmCustomersForBooking
 } from '../../services/salesCommercialSync.js';
 import { releaseSeatLegAllocationsForBooking, syncSeatLegAllocationsForBooking } from '../../services/seatInventorySync.js';
+import { recordOccFlightEvent } from '../../services/occFlightEvents.js';
 
 const router = express.Router();
 
@@ -998,6 +999,31 @@ router.post('/', requireAuth, requireRoles(...ROLES_BOOKING_DESK), async (req, r
 
     await client.query('COMMIT');
 
+    try {
+      if (outboundFlight?.id) {
+        await recordOccFlightEvent(pool, {
+          flightId: outboundFlight.id,
+          eventType: 'BOOKING_LINK',
+          sourceSystem: 'booking',
+          userId: req.user.userId,
+          payload: { bookingId: booking.id, pnr: bookingRow.pnr, leg: 'OUTBOUND' }
+        });
+      }
+      if (inboundFlight?.id) {
+        await recordOccFlightEvent(pool, {
+          flightId: inboundFlight.id,
+          eventType: 'BOOKING_LINK',
+          sourceSystem: 'booking',
+          userId: req.user.userId,
+          payload: { bookingId: booking.id, pnr: bookingRow.pnr, leg: 'INBOUND' }
+        });
+      }
+    } catch (e) {
+      if (process.env.NODE_ENV !== 'production') {
+        console.warn('[booking] OCC event:', e?.message || e);
+      }
+    }
+
     return res.status(201).json({
       booking: {
         ...bookingRow,
@@ -1375,6 +1401,28 @@ router.post(
         ]
       );
       await client.query('COMMIT');
+
+      try {
+        const legs = await pool.query(
+          `SELECT flight_id, leg_type FROM booking_flights WHERE booking_id = $1`,
+          [bookingId]
+        );
+        for (const leg of legs.rows) {
+          if (!leg.flight_id) continue;
+          await recordOccFlightEvent(pool, {
+            flightId: leg.flight_id,
+            eventType: 'BOOKING_CANCELLED',
+            sourceSystem: 'booking',
+            userId: req.user.userId,
+            payload: { bookingId, pnr: row.pnr, legType: leg.leg_type }
+          });
+        }
+      } catch (occErr) {
+        if (process.env.NODE_ENV !== 'production') {
+          console.warn('[booking] OCC cancel event:', occErr?.message || occErr);
+        }
+      }
+
       return res.status(200).json({ bookingId, pnr: row.pnr, booking_status: 'CANCELLED' });
     } catch (error) {
       await client.query('ROLLBACK');
