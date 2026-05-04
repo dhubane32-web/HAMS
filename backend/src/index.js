@@ -13,6 +13,7 @@ import masterDataRoutes from './routes/modules/master-data.js';
 import systemAdminRoutes from './routes/modules/system-administration.js';
 import crewRoutes from './routes/modules/crew.js';
 import salesRoutes from './routes/modules/sales.js';
+import { salesCommercialRouter } from './routes/modules/salesCommercialExtras.js';
 import customerServiceRoutes from './routes/modules/customer-service.js';
 import reportsAnalyticsRoutes from './routes/modules/reports-analytics.js';
 
@@ -74,6 +75,7 @@ app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/master-data', masterDataRoutes);
 app.use('/api/system', systemAdminRoutes);
 app.use('/api/crew', crewRoutes);
+app.use('/api/sales/commercial', salesCommercialRouter);
 app.use('/api/sales', salesRoutes);
 app.use('/api/customer-service', customerServiceRoutes);
 app.use('/api/reports-analytics', reportsAnalyticsRoutes);

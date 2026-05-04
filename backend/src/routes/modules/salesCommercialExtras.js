@@ -1,3 +1,4 @@
+import express from 'express';
 import { pool } from '../../config/db.js';
 import { requireAuth, requireRoles } from '../../middleware/auth.js';
 import { writeAudit } from '../../services/auditService.js';
@@ -18,6 +19,107 @@ function isUuid(v) {
   );
 }
 
+/** Shared handler: GET /api/sales/commercial-kpi-dashboard and GET /api/sales/commercial/kpis */
+async function handleCommercialKpiDashboard(_req, res) {
+  const today = new Date().toISOString().slice(0, 10);
+  const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
+  const monthStart = `${today.slice(0, 7)}-01`;
+  const lfWindow = monthToDateDepartureWindow(today);
+  try {
+    const [todaySales, weekSales, monthSales, avgFare, lfSnap, routeSnap, topAgent, topCorp, channelMix] =
+      await Promise.all([
+        pool.query(
+          `SELECT COALESCE(SUM(b.total_amount),0)::numeric AS v, COUNT(*)::int AS c
+             FROM bookings b WHERE DATE(b.created_at) = DATE($1::date) AND upper(trim(b.booking_status)) <> 'CANCELLED'`,
+          [today]
+        ),
+        pool.query(
+          `SELECT COALESCE(SUM(b.total_amount),0)::numeric AS v, COUNT(*)::int AS c
+             FROM bookings b WHERE b.created_at >= $1::timestamptz AND upper(trim(b.booking_status)) <> 'CANCELLED'`,
+          [weekAgo]
+        ),
+        pool.query(
+          `SELECT COALESCE(SUM(b.total_amount),0)::numeric AS v, COUNT(*)::int AS c
+             FROM bookings b WHERE b.created_at >= $1::timestamptz AND upper(trim(b.booking_status)) <> 'CANCELLED'`,
+          [monthStart]
+        ),
+        pool.query(
+          `SELECT COALESCE(AVG(b.total_amount),0)::numeric AS v FROM bookings b
+             WHERE b.created_at >= $1::timestamptz AND upper(trim(b.booking_status)) <> 'CANCELLED'`,
+          [monthStart]
+        ),
+        queryLoadFactorSnapshot(pool, lfWindow.fromTs, lfWindow.toExclusiveTs),
+        queryRouteAnalyticsSnapshot(pool, lfWindow.fromTs, lfWindow.toExclusiveTs).catch(() => ({
+          scope: { routeCount: 0 },
+          highestRevenue: null,
+          highestBooked: null,
+          bestYield: null,
+          bestLoadFactor: null,
+          worstPerforming: null,
+          cabinAnalytics: { byCabin: [], byRouteAndCabin: [] }
+        })),
+        pool.query(
+          `SELECT u.full_name, COUNT(*)::int AS c, COALESCE(SUM(b.total_amount),0)::numeric AS rev
+             FROM bookings b JOIN users u ON u.id = b.created_by
+             WHERE b.created_at >= $1::timestamptz AND upper(trim(b.booking_status)) <> 'CANCELLED'
+             GROUP BY u.id ORDER BY rev DESC LIMIT 1`,
+          [monthStart]
+        ),
+        pool.query(
+          `SELECT c.legal_name, COUNT(*)::int AS c, COALESCE(SUM(b.total_amount),0)::numeric AS rev
+             FROM bookings b
+             JOIN sales_corporate_customers c ON c.id = b.corporate_account_id
+             WHERE b.created_at >= $1::timestamptz AND upper(trim(b.booking_status)) <> 'CANCELLED'
+             GROUP BY c.id ORDER BY rev DESC LIMIT 1`,
+          [monthStart]
+        ),
+        pool.query(`SELECT * FROM sm_v_channel_revenue ORDER BY paid_revenue DESC`).catch(() => ({ rows: [] }))
+      ]);
+
+    return res.json({
+      asOf: new Date().toISOString(),
+      today: { revenue: Number(todaySales.rows[0]?.v || 0), bookings: Number(todaySales.rows[0]?.c || 0) },
+      week: { revenue: Number(weekSales.rows[0]?.v || 0), bookings: Number(weekSales.rows[0]?.c || 0) },
+      month: { revenue: Number(monthSales.rows[0]?.v || 0), bookings: Number(monthSales.rows[0]?.c || 0) },
+      averageFare: Number(avgFare.rows[0]?.v || 0),
+      loadFactor: lfSnap.loadFactor,
+      loadFactorScope: {
+        departureFrom: lfWindow.fromTs,
+        departureBeforeExclusive: lfWindow.toExclusiveTs,
+        calendarMonthStart: lfWindow.monthStart,
+        totalSeatsSold: lfSnap.totalSeatsSold,
+        totalSeatsAvailable: lfSnap.totalSeatsAvailable,
+        flightLegCount: lfSnap.flightLegCount,
+        formula:
+          'sum(seats_sold)/sum(seats_available) over scheduled legs; seats_sold = distinct passengers on sm_seat_leg_allocation (issued tickets, INF excluded at allocation); capacity = aircraft.seat_capacity; legs without aircraft omitted from denominator'
+      },
+      perFlightLoadFactor: lfSnap.perFlightLoadFactor,
+      topRoute: routeSnap.highestRevenue
+        ? {
+            origin: routeSnap.highestRevenue.origin,
+            dest: routeSnap.highestRevenue.dest,
+            route: routeSnap.highestRevenue.route,
+            revenue: routeSnap.highestRevenue.revenue
+          }
+        : null,
+      routeAnalytics: {
+        departureFrom: lfWindow.fromTs,
+        departureBeforeExclusive: lfWindow.toExclusiveTs,
+        ...routeSnap
+      },
+      topAgent: topAgent.rows[0] || null,
+      topCorporate: topCorp.rows[0] || null,
+      channelRevenue: channelMix.rows || []
+    });
+  } catch (e) {
+    return res.status(500).json({ message: 'Failed to load commercial KPIs.', error: e.message });
+  }
+}
+
+/** Mounted in index.js at /api/sales/commercial — frontend GET /api/sales/commercial/kpis */
+export const salesCommercialRouter = express.Router();
+salesCommercialRouter.get('/kpis', requireAuth, requireRoles(...ROLES_SALES_FIN), handleCommercialKpiDashboard);
+
 export function registerSalesCommercialRoutes(router) {
   router.get('/sales-channels', requireAuth, requireRoles(...ROLES_SALES_FIN), async (_req, res) => {
     try {
@@ -30,101 +132,7 @@ export function registerSalesCommercialRoutes(router) {
     }
   });
 
-  router.get('/commercial-kpi-dashboard', requireAuth, requireRoles(...ROLES_SALES_FIN), async (_req, res) => {
-    const today = new Date().toISOString().slice(0, 10);
-    const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
-    const monthStart = `${today.slice(0, 7)}-01`;
-    const lfWindow = monthToDateDepartureWindow(today);
-    try {
-      const [todaySales, weekSales, monthSales, avgFare, lfSnap, routeSnap, topAgent, topCorp, channelMix] =
-        await Promise.all([
-          pool.query(
-            `SELECT COALESCE(SUM(b.total_amount),0)::numeric AS v, COUNT(*)::int AS c
-             FROM bookings b WHERE DATE(b.created_at) = DATE($1::date) AND upper(trim(b.booking_status)) <> 'CANCELLED'`,
-            [today]
-          ),
-          pool.query(
-            `SELECT COALESCE(SUM(b.total_amount),0)::numeric AS v, COUNT(*)::int AS c
-             FROM bookings b WHERE b.created_at >= $1::timestamptz AND upper(trim(b.booking_status)) <> 'CANCELLED'`,
-            [weekAgo]
-          ),
-          pool.query(
-            `SELECT COALESCE(SUM(b.total_amount),0)::numeric AS v, COUNT(*)::int AS c
-             FROM bookings b WHERE b.created_at >= $1::timestamptz AND upper(trim(b.booking_status)) <> 'CANCELLED'`,
-            [monthStart]
-          ),
-          pool.query(
-            `SELECT COALESCE(AVG(b.total_amount),0)::numeric AS v FROM bookings b
-             WHERE b.created_at >= $1::timestamptz AND upper(trim(b.booking_status)) <> 'CANCELLED'`,
-            [monthStart]
-          ),
-          queryLoadFactorSnapshot(pool, lfWindow.fromTs, lfWindow.toExclusiveTs),
-          queryRouteAnalyticsSnapshot(pool, lfWindow.fromTs, lfWindow.toExclusiveTs).catch(() => ({
-            scope: { routeCount: 0 },
-            highestRevenue: null,
-            highestBooked: null,
-            bestYield: null,
-            bestLoadFactor: null,
-            worstPerforming: null,
-            cabinAnalytics: { byCabin: [], byRouteAndCabin: [] }
-          })),
-          pool.query(
-            `SELECT u.full_name, COUNT(*)::int AS c, COALESCE(SUM(b.total_amount),0)::numeric AS rev
-             FROM bookings b JOIN users u ON u.id = b.created_by
-             WHERE b.created_at >= $1::timestamptz AND upper(trim(b.booking_status)) <> 'CANCELLED'
-             GROUP BY u.id ORDER BY rev DESC LIMIT 1`,
-            [monthStart]
-          ),
-          pool.query(
-            `SELECT c.legal_name, COUNT(*)::int AS c, COALESCE(SUM(b.total_amount),0)::numeric AS rev
-             FROM bookings b
-             JOIN sales_corporate_customers c ON c.id = b.corporate_account_id
-             WHERE b.created_at >= $1::timestamptz AND upper(trim(b.booking_status)) <> 'CANCELLED'
-             GROUP BY c.id ORDER BY rev DESC LIMIT 1`,
-            [monthStart]
-          ),
-          pool.query(`SELECT * FROM sm_v_channel_revenue ORDER BY paid_revenue DESC`).catch(() => ({ rows: [] }))
-        ]);
-
-      return res.json({
-        asOf: new Date().toISOString(),
-        today: { revenue: Number(todaySales.rows[0]?.v || 0), bookings: Number(todaySales.rows[0]?.c || 0) },
-        week: { revenue: Number(weekSales.rows[0]?.v || 0), bookings: Number(weekSales.rows[0]?.c || 0) },
-        month: { revenue: Number(monthSales.rows[0]?.v || 0), bookings: Number(monthSales.rows[0]?.c || 0) },
-        averageFare: Number(avgFare.rows[0]?.v || 0),
-        loadFactor: lfSnap.loadFactor,
-        loadFactorScope: {
-          departureFrom: lfWindow.fromTs,
-          departureBeforeExclusive: lfWindow.toExclusiveTs,
-          calendarMonthStart: lfWindow.monthStart,
-          totalSeatsSold: lfSnap.totalSeatsSold,
-          totalSeatsAvailable: lfSnap.totalSeatsAvailable,
-          flightLegCount: lfSnap.flightLegCount,
-          formula:
-            'sum(seats_sold)/sum(seats_available) over scheduled legs; seats_sold = distinct passengers on sm_seat_leg_allocation (issued tickets, INF excluded at allocation); capacity = aircraft.seat_capacity; legs without aircraft omitted from denominator'
-        },
-        perFlightLoadFactor: lfSnap.perFlightLoadFactor,
-        topRoute: routeSnap.highestRevenue
-          ? {
-              origin: routeSnap.highestRevenue.origin,
-              dest: routeSnap.highestRevenue.dest,
-              route: routeSnap.highestRevenue.route,
-              revenue: routeSnap.highestRevenue.revenue
-            }
-          : null,
-        routeAnalytics: {
-          departureFrom: lfWindow.fromTs,
-          departureBeforeExclusive: lfWindow.toExclusiveTs,
-          ...routeSnap
-        },
-        topAgent: topAgent.rows[0] || null,
-        topCorporate: topCorp.rows[0] || null,
-        channelRevenue: channelMix.rows || []
-      });
-    } catch (e) {
-      return res.status(500).json({ message: 'Failed to load commercial KPIs.', error: e.message });
-    }
-  });
+  router.get('/commercial-kpi-dashboard', requireAuth, requireRoles(...ROLES_SALES_FIN), handleCommercialKpiDashboard);
 
   router.get('/revenue-management/summary', requireAuth, requireRoles(...ROLES_SALES_FIN), async (req, res) => {
     const from = String(req.query.from || new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10));
