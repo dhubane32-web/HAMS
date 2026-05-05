@@ -4,9 +4,14 @@
 
 import PDFDocument from 'pdfkit';
 import QRCode from 'qrcode';
+import {
+  HAWANA_BRAND,
+  readOptionalBrandLogoPng,
+  drawStandardDocumentHeader,
+  drawStandardPdfFooter
+} from '../lib/hawanaBranding.js';
 
-const AIRLINE_NAME = 'Hawana Airways';
-const BRAND_HEX = '#0d47a1';
+const BRAND_HEX = HAWANA_BRAND.primaryHex;
 
 function formatWhen(iso) {
   if (!iso) return '—';
@@ -36,15 +41,22 @@ export async function buildBoardingPassPdfBuffer(view) {
   if (!view) return null;
   const qrPayload = `HAMS|BP|${view.boardingPassNo || view.checkin_id}|${view.pnr || ''}`;
   const qrPng = await QRCode.toBuffer(qrPayload, { type: 'png', margin: 1, width: 120, errorCorrectionLevel: 'M' });
+  const logoBuf = readOptionalBrandLogoPng();
 
   return pdfBufferFromBuilder((doc) => {
-    doc.save();
-    doc.rect(0, 0, doc.page.width, 52).fillColor(BRAND_HEX).fill();
-    doc.fillColor('#fff').fontSize(11).text(AIRLINE_NAME, 20, 14);
-    doc.fontSize(8).text('Boarding pass', 20, 30);
-    doc.restore();
+    const bandH = drawStandardDocumentHeader(doc, 'Boarding pass', {
+      logoBuf,
+      marginLeft: 0,
+      pageWidth: doc.page.width,
+      y: 0,
+      bandHeight: 52,
+      innerPad: 12,
+      logoMaxW: 88,
+      logoMaxH: 28,
+      bandColor: BRAND_HEX
+    });
     doc.fillColor('#111').fontSize(9);
-    let y = 58;
+    let y = bandH + 6;
     const line = (t) => {
       doc.text(t, 20, y, { width: doc.page.width - 40 });
       y += 12;
@@ -60,7 +72,8 @@ export async function buildBoardingPassPdfBuffer(view) {
     }
     line(`Status: ${view.boarding_status || '—'} / ${view.checkin_status || '—'}`);
     doc.image(qrPng, (doc.page.width - 100) / 2, y + 4, { width: 100, height: 100 });
-    doc.fontSize(6).fillColor('#64748b').text('Scan at gate / security', 20, doc.page.height - 28, { align: 'center', width: doc.page.width - 40 });
+    doc.fontSize(6).fillColor('#64748b').text('Scan at gate / security', 20, doc.page.height - 44, { align: 'center', width: doc.page.width - 40 });
+    drawStandardPdfFooter(doc, 20, doc.page.height - 52, doc.page.width - 40, { withLogo: true, logoBuf });
   });
 }
 
@@ -80,12 +93,22 @@ export async function buildBagTagPdfBuffer(ctx) {
   } = ctx;
   const qrPayload = `HAMS|BAG|${tagNumber}`;
   const qrPng = await QRCode.toBuffer(qrPayload, { type: 'png', margin: 1, width: 100, errorCorrectionLevel: 'M' });
+  const logoBuf = readOptionalBrandLogoPng();
 
   return pdfBufferFromBuilder((doc) => {
-    doc.rect(0, 0, doc.page.width, 40).fillColor('#1e293b').fill();
-    doc.fillColor('#fff').fontSize(10).text('BAGGAGE', 16, 12);
+    const bandH = drawStandardDocumentHeader(doc, 'Baggage tag', {
+      logoBuf,
+      marginLeft: 0,
+      pageWidth: doc.page.width,
+      y: 0,
+      bandHeight: 42,
+      innerPad: 10,
+      logoMaxW: 56,
+      logoMaxH: 22,
+      bandColor: '#1e293b'
+    });
     doc.fillColor('#111').fontSize(10);
-    let y = 48;
+    let y = bandH + 6;
     doc.font('Helvetica-Bold').text(String(tagNumber || '—'), 16, y, { width: doc.page.width - 32 });
     y += 22;
     doc.font('Helvetica').fontSize(9);
@@ -96,10 +119,11 @@ export async function buildBagTagPdfBuffer(ctx) {
     doc.text(passengerName || '—', 16, y, { width: doc.page.width - 32 });
     y += 28;
     doc.text(`Wt ${weightKg != null ? `${weightKg} kg` : '—'}  ·  Pcs ${pieces != null ? pieces : '—'}`, 16, y);
-    doc.image(qrPng, doc.page.width - 116, 44, { width: 88, height: 88 });
-    doc.fontSize(6).fillColor('#64748b').text('Affix to bag — destination below flight', 16, doc.page.height - 22, {
+    doc.image(qrPng, doc.page.width - 116, bandH + 8, { width: 88, height: 88 });
+    doc.fontSize(6).fillColor('#64748b').text('Affix to bag — destination below flight', 16, doc.page.height - 48, {
       width: doc.page.width - 32
     });
+    drawStandardPdfFooter(doc, 16, doc.page.height - 54, doc.page.width - 32, { withLogo: true, logoBuf });
   });
 }
 

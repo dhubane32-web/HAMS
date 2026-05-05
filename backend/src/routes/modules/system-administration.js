@@ -5,6 +5,18 @@ import { pool } from '../../config/db.js';
 import { requireAuth, requireSuperAdmin, requireUserManager } from '../../middleware/auth.js';
 import { isSuperAdmin, canManageUsers } from '../../lib/roles.js';
 import { writeAudit } from '../../services/auditService.js';
+import { validatePasswordStrength } from '../../lib/passwordPolicy.js';
+import {
+  cleanupBackupsByRetention,
+  decryptBackupToTemp,
+  getBackupHealthSummary,
+  getOffsiteProviderStatus,
+  listBackupLogs,
+  resolveBackupFileById,
+  restoreFromBackupLog,
+  runFullBackup,
+  simulateRestoreFromBackupLog
+} from '../../services/backupService.js';
 
 const router = express.Router();
 
@@ -43,6 +55,10 @@ router.post('/users', requireAuth, requireUserManager, async (req, res) => {
   const { full_name, email, password, role = 'agent' } = req.body;
   if (!full_name || !email || !password) {
     return res.status(400).json({ message: 'full_name, email, and password are required.' });
+  }
+  const pwCheck = validatePasswordStrength(password);
+  if (!pwCheck.ok) {
+    return res.status(400).json({ message: pwCheck.message });
   }
   if (role === 'super_admin' && !isSuperAdmin(req.user.role)) {
     return res.status(403).json({ message: 'Only Super Admin can assign the Super Admin role.' });
@@ -192,8 +208,12 @@ router.put('/users/:id', requireAuth, requireUserManager, async (req, res) => {
 
 router.post('/users/:id/password-reset', requireAuth, requireUserManager, async (req, res) => {
   const { newPassword } = req.body;
-  if (!newPassword || String(newPassword).length < 8) {
-    return res.status(400).json({ message: 'newPassword must be at least 8 characters.' });
+  if (!newPassword) {
+    return res.status(400).json({ message: 'newPassword is required.' });
+  }
+  const pwCheck = validatePasswordStrength(newPassword);
+  if (!pwCheck.ok) {
+    return res.status(400).json({ message: pwCheck.message });
   }
 
   const client = await pool.connect();
@@ -208,7 +228,8 @@ router.post('/users/:id/password-reset', requireAuth, requireUserManager, async 
 
     const hash = await bcrypt.hash(String(newPassword), BCRYPT_ROUNDS);
     const r = await client.query(
-      `UPDATE users SET password_hash = $1, password_reset_token = NULL, password_reset_expires_at = NULL, updated_at = NOW()
+      `UPDATE users SET password_hash = $1, password_reset_token = NULL, password_reset_expires_at = NULL,
+         password_changed_at = NOW(), updated_at = NOW()
        WHERE id = $2::uuid RETURNING id, email`,
       [hash, req.params.id]
     );
@@ -414,6 +435,119 @@ router.put('/settings/:category/:key', requireAuth, async (req, res) => {
     res.status(500).json({ message: 'Failed to save setting.', error: e.message });
   } finally {
     client.release();
+  }
+});
+
+router.post('/backup/now', requireAuth, requireUserManager, async (req, res) => {
+  try {
+    const triggerKind = ['daily', 'weekly', 'monthly'].includes(String(req.body?.tier || ''))
+      ? String(req.body.tier)
+      : 'manual';
+    const out = await runFullBackup({ triggeredBy: req.user.userId, triggerKind });
+    await writeAudit(pool, {
+      userId: req.user.userId,
+      action: 'BACKUP_TRIGGERED',
+      entity: 'backup_logs',
+      entityId: null,
+      metadata: { files: out.rows.map((x) => x.id), count: out.rows.length, triggerKind },
+      req
+    });
+    return res.status(201).json({
+      message: 'Backup created.',
+      backupCount: out.rows.length,
+      rows: out.rows
+    });
+  } catch (error) {
+    return res.status(500).json({ message: 'Failed to run backup.', error: error.message });
+  }
+});
+
+router.get('/backup/history', requireAuth, requireUserManager, async (req, res) => {
+  try {
+    const { rows, limit, offset } = await listBackupLogs({ limit: req.query.limit, offset: req.query.offset });
+    return res.json({ rows, limit, offset });
+  } catch (error) {
+    return res.status(500).json({ message: 'Failed to load backup history.', error: error.message });
+  }
+});
+
+router.get('/backup/download/:id', requireAuth, requireUserManager, async (req, res) => {
+  try {
+    const resolved = await decryptBackupToTemp(req.params.id);
+    if (!resolved?.row) {
+      return res.status(404).json({ message: 'Backup entry not found.' });
+    }
+    const { row, tmpPath } = resolved;
+    const base = String(row.file_name).split('/').pop() || `backup-${row.id}`;
+    const cleaned = base.endsWith('.enc') ? base.slice(0, -4) : base;
+    return res.download(tmpPath, cleaned, async () => {
+      await pool.query(`UPDATE backup_logs SET last_downloaded_at = NOW() WHERE id = $1::uuid`, [row.id]).catch(() => {});
+    });
+  } catch (error) {
+    return res.status(500).json({ message: 'Failed to download backup file.', error: error.message });
+  }
+});
+
+router.post('/backup/restore/:id', requireAuth, requireUserManager, async (req, res) => {
+  try {
+    const restored = await restoreFromBackupLog({ id: req.params.id, restoredBy: req.user.userId });
+    await writeAudit(pool, {
+      userId: req.user.userId,
+      action: 'BACKUP_RESTORED',
+      entity: 'backup_logs',
+      entityId: restored.id,
+      metadata: { backup_type: restored.backup_type, file_name: restored.file_name },
+      req
+    });
+    return res.json({ message: 'Restore completed.', row: restored });
+  } catch (error) {
+    const status = Number(error.statusCode) || 500;
+    return res.status(status).json({ message: 'Failed to restore backup.', error: error.message });
+  }
+});
+
+router.post('/backup/restore-simulate/:id', requireAuth, requireUserManager, async (req, res) => {
+  try {
+    const simulated = await simulateRestoreFromBackupLog({ id: req.params.id });
+    await writeAudit(pool, {
+      userId: req.user.userId,
+      action: 'BACKUP_RESTORE_SIMULATED',
+      entity: 'backup_logs',
+      entityId: simulated.id,
+      metadata: { backup_type: simulated.backup_type },
+      req
+    });
+    return res.json({ message: 'Restore simulation completed.', row: simulated });
+  } catch (error) {
+    const status = Number(error.statusCode) || 500;
+    return res.status(status).json({ message: 'Failed to run restore simulation.', error: error.message });
+  }
+});
+
+router.post('/backup/cleanup', requireAuth, requireUserManager, async (req, res) => {
+  try {
+    const out = await cleanupBackupsByRetention();
+    return res.json({ message: 'Backup cleanup completed.', ...out });
+  } catch (error) {
+    return res.status(500).json({ message: 'Failed to run cleanup.', error: error.message });
+  }
+});
+
+router.get('/backup/health', requireAuth, requireUserManager, async (_req, res) => {
+  try {
+    const [health, offsite] = await Promise.all([getBackupHealthSummary(), getOffsiteProviderStatus()]);
+    return res.json({
+      health,
+      retentionPolicy: { daily: '7d', weekly: '4w', monthly: '12m' },
+      scheduler: {
+        daily: `${String(process.env.BACKUP_DAILY_HOUR_UTC || 2).padStart(2, '0')}:${String(process.env.BACKUP_DAILY_MINUTE_UTC || 0).padStart(2, '0')} UTC`,
+        weekly: `Sunday ${String(process.env.BACKUP_WEEKLY_HOUR_UTC || 2).padStart(2, '0')}:${String(process.env.BACKUP_WEEKLY_MINUTE_UTC || 15).padStart(2, '0')} UTC`,
+        monthly: `Day 1 ${String(process.env.BACKUP_MONTHLY_HOUR_UTC || 2).padStart(2, '0')}:${String(process.env.BACKUP_MONTHLY_MINUTE_UTC || 30).padStart(2, '0')} UTC`
+      },
+      offsite
+    });
+  } catch (error) {
+    return res.status(500).json({ message: 'Failed to load backup health.', error: error.message });
   }
 });
 

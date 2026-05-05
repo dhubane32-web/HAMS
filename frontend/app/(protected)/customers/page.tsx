@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
+import DocumentHeader from '@/components/documents/DocumentHeader';
 
 const passengers = [
   { id: 'PAX001', name: 'Ahmed Noor', email: 'ahmed@example.com', tier: 'Gold' },
@@ -23,8 +24,9 @@ export default function CustomersPage() {
 
   return (
     <main className="module-page">
+      <DocumentHeader documentTitle="Customer portal — CRM snapshot" className="mb-6" />
       <section className="module-card">
-        <h1>Customer Service</h1>
+        <h1>Customer portal</h1>
         <div className="module-form-grid">
           <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Passenger search" />
           <button onClick={() => toast.success(`Loaded ${passenger.name}`)}>Search Passenger</button>

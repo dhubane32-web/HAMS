@@ -42,6 +42,32 @@ type UserRow = {
   created_at: string;
 };
 
+type BackupLogRow = {
+  id: string;
+  backup_type: string;
+  file_name: string;
+  file_size: number;
+  status: string;
+  backup_tier?: string;
+  is_encrypted?: boolean;
+  offsite_status?: string;
+  created_at: string;
+  restored_at: string | null;
+};
+
+type BackupHealth = {
+  health?: {
+    lastBackupStatus?: string;
+    lastBackupSize?: number;
+    lastBackupAt?: string | null;
+    lastRestoreTest?: { restored_at?: string | null } | null;
+    failedBackupAlerts?: Array<{ id: string; status: string; created_at: string }>;
+  };
+  retentionPolicy?: { daily: string; weekly: string; monthly: string };
+  scheduler?: { daily: string; weekly: string; monthly: string };
+  offsite?: { provider: string; configured: boolean; dryRun: boolean; message: string };
+};
+
 function getToken() {
   return typeof window !== 'undefined' ? localStorage.getItem('hams_token') : null;
 }
@@ -74,6 +100,9 @@ export default function SystemAdministrationApp() {
   const [securityJson, setSecurityJson] = useState('{}');
   const [backupJson, setBackupJson] = useState('{}');
   const [notifJson, setNotifJson] = useState('{}');
+  const [backupRows, setBackupRows] = useState<BackupLogRow[]>([]);
+  const [backupBusy, setBackupBusy] = useState(false);
+  const [backupHealth, setBackupHealth] = useState<BackupHealth | null>(null);
 
   const [newName, setNewName] = useState('');
   const [newEmail, setNewEmail] = useState('');
@@ -158,6 +187,20 @@ export default function SystemAdministrationApp() {
     await fetchCat('notification', Boolean(caps?.canEditNotificationSettings));
   }, [caps]);
 
+  const loadBackupHistory = useCallback(async () => {
+    const r = await api('/backup/history?limit=100');
+    const j = (await r.json()) as { rows?: BackupLogRow[]; message?: string };
+    if (!r.ok) return toast.error(j.message || 'Failed to load backup history');
+    setBackupRows(j.rows || []);
+  }, []);
+
+  const loadBackupHealth = useCallback(async () => {
+    const r = await api('/backup/health');
+    const j = (await r.json()) as BackupHealth & { message?: string };
+    if (!r.ok) return toast.error(j.message || 'Failed to load backup health');
+    setBackupHealth(j);
+  }, []);
+
   useEffect(() => {
     void loadCaps();
   }, [loadCaps]);
@@ -170,7 +213,93 @@ export default function SystemAdministrationApp() {
     if (tab === 'activity') void loadActivity();
     if (tab === 'roles') void loadRolesMeta();
     if (tab === 'security' || tab === 'backup' || tab === 'notifications') void loadSettings();
-  }, [tab, caps, loadUsers, loadAudit, loadLogins, loadActivity, loadRolesMeta, loadSettings]);
+    if (tab === 'backup') {
+      void loadBackupHistory();
+      void loadBackupHealth();
+    }
+  }, [tab, caps, loadUsers, loadAudit, loadLogins, loadActivity, loadRolesMeta, loadSettings, loadBackupHistory, loadBackupHealth]);
+
+  async function triggerBackupNow(tier: 'manual' | 'daily' | 'weekly' | 'monthly' = 'manual') {
+    setBackupBusy(true);
+    try {
+      const r = await api('/backup/now', { method: 'POST', body: JSON.stringify({ tier }) });
+      const j = await r.json();
+      if (!r.ok) return toast.error(j.message || 'Backup failed');
+      toast.success('Backup completed');
+      await loadBackupHistory();
+      await loadBackupHealth();
+    } finally {
+      setBackupBusy(false);
+    }
+  }
+
+  async function restoreBackup(row: BackupLogRow) {
+    if (!window.confirm(`Restore backup "${row.file_name}" (${row.backup_type})?`)) return;
+    setBackupBusy(true);
+    try {
+      const r = await api(`/backup/restore/${row.id}`, { method: 'POST' });
+      const j = await r.json();
+      if (!r.ok) return toast.error(j.message || 'Restore failed');
+      toast.success('Restore completed');
+      await loadBackupHistory();
+      await loadBackupHealth();
+    } finally {
+      setBackupBusy(false);
+    }
+  }
+
+  async function simulateRestore(row: BackupLogRow) {
+    setBackupBusy(true);
+    try {
+      const r = await api(`/backup/restore-simulate/${row.id}`, { method: 'POST' });
+      const j = await r.json();
+      if (!r.ok) return toast.error(j.message || 'Simulation failed');
+      toast.success('Restore simulation completed');
+      await loadBackupHealth();
+    } finally {
+      setBackupBusy(false);
+    }
+  }
+
+  async function runCleanup() {
+    setBackupBusy(true);
+    try {
+      const r = await api('/backup/cleanup', { method: 'POST' });
+      const j = await r.json();
+      if (!r.ok) return toast.error(j.message || 'Cleanup failed');
+      toast.success(`Cleanup completed (${j.removedCount || 0} removed)`);
+      await loadBackupHistory();
+      await loadBackupHealth();
+    } finally {
+      setBackupBusy(false);
+    }
+  }
+
+  async function downloadBackup(row: BackupLogRow) {
+    const token = getToken();
+    if (!token) {
+      toast.error('Session expired. Please sign in again.');
+      return;
+    }
+    const r = await fetch(`${API_BASE_URL}/api/system/backup/download/${encodeURIComponent(row.id)}`, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    if (!r.ok) {
+      const j = (await r.json().catch(() => ({}))) as { message?: string };
+      toast.error(j.message || 'Download failed');
+      return;
+    }
+    const blob = await r.blob();
+    const fileName = row.file_name.split('/').pop() || `backup-${row.id}`;
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
 
   useEffect(() => {
     if (tab === 'roles' && selectedRole) void loadRolePerms();
@@ -491,6 +620,58 @@ export default function SystemAdministrationApp() {
       {caps && tab === 'backup' && caps.canEditBackupSettings && (
         <section className="module-card">
           <h2 style={{ marginTop: 0 }}>Backup settings</h2>
+          <p style={{ color: '#64748b', fontSize: '0.88rem' }}>
+            Backups include database, uploads, cached ticket PDFs, and report artifacts where available.
+          </p>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
+            <button type="button" onClick={() => void triggerBackupNow('manual')} disabled={backupBusy}>
+              {backupBusy ? 'Running backup…' : 'Backup now'}
+            </button>
+            <button type="button" className="secondary" onClick={() => void triggerBackupNow('daily')} disabled={backupBusy}>
+              Daily tier
+            </button>
+            <button type="button" className="secondary" onClick={() => void triggerBackupNow('weekly')} disabled={backupBusy}>
+              Weekly tier
+            </button>
+            <button type="button" className="secondary" onClick={() => void triggerBackupNow('monthly')} disabled={backupBusy}>
+              Monthly tier
+            </button>
+            <button type="button" className="secondary" onClick={() => void loadBackupHistory()} disabled={backupBusy}>
+              Refresh history
+            </button>
+            <button type="button" className="secondary" onClick={() => void runCleanup()} disabled={backupBusy}>
+              Run cleanup
+            </button>
+          </div>
+          <div className="module-card" style={{ marginBottom: 12, background: '#f8fafc' }}>
+            <h3 style={{ marginTop: 0 }}>Backup health monitor</h3>
+            <p style={{ margin: 0, fontSize: '0.85rem' }}>
+              Last backup status: <strong>{backupHealth?.health?.lastBackupStatus || 'unknown'}</strong> | Last backup size:{' '}
+              <strong>{Math.max(0, Number(backupHealth?.health?.lastBackupSize || 0)).toLocaleString()} B</strong>
+            </p>
+            <p style={{ margin: '0.25rem 0 0', fontSize: '0.85rem' }}>
+              Last restore test:{' '}
+              <strong>
+                {backupHealth?.health?.lastRestoreTest?.restored_at
+                  ? new Date(backupHealth.health.lastRestoreTest.restored_at).toLocaleString()
+                  : 'none'}
+              </strong>
+            </p>
+            <p style={{ margin: '0.25rem 0 0', fontSize: '0.85rem' }}>
+              Failed backup alerts: <strong>{backupHealth?.health?.failedBackupAlerts?.length || 0}</strong>
+            </p>
+            <p style={{ margin: '0.25rem 0 0', fontSize: '0.85rem' }}>
+              Scheduler: {backupHealth?.scheduler?.daily || '-'} / {backupHealth?.scheduler?.weekly || '-'} /{' '}
+              {backupHealth?.scheduler?.monthly || '-'}
+            </p>
+            <p style={{ margin: '0.25rem 0 0', fontSize: '0.85rem' }}>
+              Retention: {backupHealth?.retentionPolicy?.daily || '-'} / {backupHealth?.retentionPolicy?.weekly || '-'} /{' '}
+              {backupHealth?.retentionPolicy?.monthly || '-'}
+            </p>
+            <p style={{ margin: '0.25rem 0 0', fontSize: '0.85rem' }}>
+              Offsite: <strong>{backupHealth?.offsite?.provider || 'none'}</strong> ({backupHealth?.offsite?.message || 'n/a'})
+            </p>
+          </div>
           <textarea
             value={backupJson}
             onChange={(e) => setBackupJson(e.target.value)}
@@ -500,6 +681,54 @@ export default function SystemAdministrationApp() {
           <button type="button" onClick={() => void saveSetting('backup', backupJson)}>
             Save backup
           </button>
+          <h3 style={{ marginTop: '1rem' }}>Backup history</h3>
+          <div style={{ overflow: 'auto', maxHeight: 360, border: '1px solid #e2e8f0', borderRadius: 8 }}>
+            <table className="module-table" style={{ fontSize: '0.82rem' }}>
+              <thead>
+                <tr>
+                  <th>Type</th>
+                  <th>File</th>
+                  <th>Size</th>
+                  <th>Status</th>
+                  <th>Tier</th>
+                  <th>Created</th>
+                  <th>Restored</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {backupRows.map((row) => (
+                  <tr key={row.id}>
+                    <td>{row.backup_type}</td>
+                    <td style={{ maxWidth: 360, overflow: 'hidden', textOverflow: 'ellipsis' }}>{row.file_name}</td>
+                    <td>{Math.max(0, Number(row.file_size || 0)).toLocaleString()} B</td>
+                    <td>{row.status}</td>
+                    <td>{row.backup_tier || 'daily'}</td>
+                    <td>{new Date(row.created_at).toLocaleString()}</td>
+                    <td>{row.restored_at ? new Date(row.restored_at).toLocaleString() : '—'}</td>
+                    <td style={{ whiteSpace: 'nowrap' }}>
+                      <button type="button" className="secondary" onClick={() => void downloadBackup(row)}>
+                        Download
+                      </button>{' '}
+                      <button type="button" className="secondary" onClick={() => void simulateRestore(row)} disabled={backupBusy}>
+                        Simulate restore
+                      </button>{' '}
+                      <button type="button" onClick={() => void restoreBackup(row)} disabled={backupBusy}>
+                        Restore
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+                {backupRows.length === 0 && (
+                  <tr>
+                    <td colSpan={8} style={{ color: '#64748b' }}>
+                      No backup history yet.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
         </section>
       )}
 

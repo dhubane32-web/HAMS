@@ -2,6 +2,14 @@
  * Links issued tickets to per-flight seat usage for RM load factor, buckets, and analytics.
  */
 
+function isMissingSeatAllocationRelation(err) {
+  const msg = String(err?.message || '');
+  return (
+    err?.code === '42P01' ||
+    (msg.includes('sm_seat_leg_allocation') && msg.toLowerCase().includes('does not exist'))
+  );
+}
+
 /**
  * Recompute sm_rm_flight_bucket.seats_sold from sm_seat_leg_allocation for the given flights.
  * @param {import('pg').Pool | import('pg').PoolClient} client
@@ -53,32 +61,52 @@ export async function refreshRmFlightBucketsFromAllocations(client, flightIds) {
  * @param {string} bookingId UUID
  */
 export async function syncSeatLegAllocationsForBooking(client, bookingId) {
-  await client.query(`DELETE FROM sm_seat_leg_allocation WHERE booking_id = $1::uuid`, [bookingId]);
-  const ins = await client.query(
-    `INSERT INTO sm_seat_leg_allocation (booking_id, flight_id, passenger_id, ticket_id, fare_class_id, cabin_class)
-     SELECT bf.booking_id,
-            bf.flight_id,
-            bp.passenger_id,
-            t.id,
-            bf.fare_class_id,
-            bf.cabin_class
-     FROM booking_flights bf
-     INNER JOIN bookings b ON b.id = bf.booking_id
-       AND upper(trim(COALESCE(b.booking_status, ''))) <> 'CANCELLED'
-     INNER JOIN booking_passengers bp ON bp.booking_id = b.id
-       AND upper(trim(COALESCE(bp.passenger_type, 'ADT'))) <> 'INF'
-     INNER JOIN tickets t ON t.booking_id = b.id
-       AND t.passenger_id = bp.passenger_id
-       AND upper(trim(COALESCE(t.ticket_status, ''))) = 'ISSUED'
-     WHERE bf.booking_id = $1::uuid`,
-    [bookingId]
-  );
-  const fr = await client.query(`SELECT DISTINCT flight_id FROM booking_flights WHERE booking_id = $1::uuid`, [
-    bookingId
-  ]);
-  const ids = fr.rows.map((row) => String(row.flight_id));
-  if (ids.length) await refreshRmFlightBucketsFromAllocations(client, ids);
-  return ins.rowCount;
+  try {
+    await client.query(`DELETE FROM sm_seat_leg_allocation WHERE booking_id = $1::uuid`, [bookingId]);
+    const ins = await client.query(
+      `INSERT INTO sm_seat_leg_allocation (booking_id, flight_id, passenger_id, ticket_id, fare_class_id, cabin_class)
+       SELECT bf.booking_id,
+              bf.flight_id,
+              bp.passenger_id,
+              t.id,
+              bf.fare_class_id,
+              bf.cabin_class
+       FROM booking_flights bf
+       INNER JOIN bookings b ON b.id = bf.booking_id
+         AND upper(trim(COALESCE(b.booking_status, ''))) <> 'CANCELLED'
+       INNER JOIN booking_passengers bp ON bp.booking_id = b.id
+         AND upper(trim(COALESCE(bp.passenger_type, 'ADT'))) <> 'INF'
+       INNER JOIN tickets t ON t.booking_id = b.id
+         AND t.passenger_id = bp.passenger_id
+         AND upper(trim(COALESCE(t.ticket_status, ''))) = 'ISSUED'
+       WHERE bf.booking_id = $1::uuid`,
+      [bookingId]
+    );
+    const fr = await client.query(`SELECT DISTINCT flight_id FROM booking_flights WHERE booking_id = $1::uuid`, [
+      bookingId
+    ]);
+    const ids = fr.rows.map((row) => String(row.flight_id));
+    if (ids.length) {
+      try {
+        await refreshRmFlightBucketsFromAllocations(client, ids);
+      } catch (e) {
+        if (process.env.NODE_ENV !== 'production') {
+          console.warn('[seatInventorySync] refreshRmFlightBucketsFromAllocations:', e?.message || e);
+        }
+      }
+    }
+    return ins.rowCount;
+  } catch (e) {
+    if (isMissingSeatAllocationRelation(e)) {
+      if (process.env.NODE_ENV !== 'production') {
+        console.warn(
+          '[seatInventorySync] sm_seat_leg_allocation missing; skipping seat sync. Apply database/migrations/001_sm_seat_leg_allocation.sql'
+        );
+      }
+      return 0;
+    }
+    throw e;
+  }
 }
 
 /**
@@ -87,10 +115,28 @@ export async function syncSeatLegAllocationsForBooking(client, bookingId) {
  * @param {string} bookingId UUID
  */
 export async function releaseSeatLegAllocationsForBooking(client, bookingId) {
-  const fr = await client.query(`SELECT DISTINCT flight_id FROM sm_seat_leg_allocation WHERE booking_id = $1::uuid`, [
-    bookingId
-  ]);
-  const ids = fr.rows.map((row) => String(row.flight_id));
-  await client.query(`DELETE FROM sm_seat_leg_allocation WHERE booking_id = $1::uuid`, [bookingId]);
-  if (ids.length) await refreshRmFlightBucketsFromAllocations(client, ids);
+  try {
+    const fr = await client.query(`SELECT DISTINCT flight_id FROM sm_seat_leg_allocation WHERE booking_id = $1::uuid`, [
+      bookingId
+    ]);
+    const ids = fr.rows.map((row) => String(row.flight_id));
+    await client.query(`DELETE FROM sm_seat_leg_allocation WHERE booking_id = $1::uuid`, [bookingId]);
+    if (ids.length) {
+      try {
+        await refreshRmFlightBucketsFromAllocations(client, ids);
+      } catch (e) {
+        if (process.env.NODE_ENV !== 'production') {
+          console.warn('[seatInventorySync] refreshRmFlightBucketsFromAllocations:', e?.message || e);
+        }
+      }
+    }
+  } catch (e) {
+    if (isMissingSeatAllocationRelation(e)) {
+      if (process.env.NODE_ENV !== 'production') {
+        console.warn('[seatInventorySync] sm_seat_leg_allocation missing; skipping release.');
+      }
+      return;
+    }
+    throw e;
+  }
 }

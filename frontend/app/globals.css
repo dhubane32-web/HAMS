@@ -1,3 +1,7 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
 :root {
   --blue-700: #0047ab;
   --blue-900: #001f5b;
@@ -8,7 +12,7 @@
 }
 
 * { box-sizing: border-box; }
-html, body { margin: 0; padding: 0; font-family: 'Poppins', Inter, sans-serif; background: var(--surface); color: var(--text); }
+html, body { margin: 0; padding: 0; font-family: inherit; background: var(--surface); color: var(--text); }
 a { color: inherit; text-decoration: none; }
 
 #nprogress .bar { height: 3px; background: linear-gradient(90deg, #0ea5e9, #22d3ee, #34d399); }
@@ -492,7 +496,7 @@ a { color: inherit; text-decoration: none; }
   color: #fff; display: flex; flex-direction: column; gap: 0.75rem;
 }
 .hams-sidebar-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 0.5rem; }
-.hams-brand { display: flex; gap: 0.55rem; align-items: center; }
+.hams-brand { display: flex; gap: 0.55rem; align-items: center; min-width: 0; }
 .hams-brand h1 { margin: 0; font-size: 0.92rem; letter-spacing: 0.03em; }
 .hams-brand p { margin: 0.2rem 0 0; font-size: 0.67rem; opacity: 0.85; max-width: 150px; }
 .hams-nav-list { display: grid; gap: 0.2rem; overflow: auto; }
@@ -517,6 +521,17 @@ a { color: inherit; text-decoration: none; }
 }
 .hams-page-title h2 { margin: 0; font-size: 1.05rem; color: #0f172a; }
 .hams-page-title p { margin: 0.15rem 0 0; color: #64748b; font-size: .78rem; }
+.hams-page-title-with-brand { display: flex; align-items: center; gap: 0.65rem; min-width: 0; }
+.hams-page-title-with-brand > .min-w-0 { flex: 1; min-width: 0; }
+.hams-page-title-with-brand h2 {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hams-page-title-with-brand p {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .hams-search { display: flex; align-items: center; gap: .45rem; background: #f8fbff; border: 1px solid #dbe5f5; border-radius: 10px; padding: .45rem .65rem; }
 .hams-search input { border: none; outline: none; width: 100%; background: transparent; font-size: .85rem; }
 .hams-topbar-actions { display: flex; align-items: center; gap: .42rem; }
@@ -985,4 +1000,39 @@ a { color: inherit; text-decoration: none; }
   font-weight: 600;
   letter-spacing: 0.12em;
   color: #94a3b8;
+}
+
+/* Dark theme — readable chrome + logo contrast (BrandLogo switches navbar asset via data-theme) */
+[data-theme='dark'] .hams-main-content {
+  background: #0f172a;
+}
+[data-theme='dark'] .hams-topbar {
+  background: #1e293b;
+  border-color: #334155;
+}
+[data-theme='dark'] .hams-page-title h2 {
+  color: #f1f5f9;
+}
+[data-theme='dark'] .hams-page-title p {
+  color: #94a3b8;
+}
+[data-theme='dark'] .hams-search {
+  background: #0f172a;
+  border-color: #334155;
+}
+[data-theme='dark'] .hams-search input {
+  color: #e2e8f0;
+}
+[data-theme='dark'] .hams-profile-btn {
+  background: #0f172a;
+  border-color: #334155;
+}
+[data-theme='dark'] .hams-profile-btn strong {
+  color: #f1f5f9;
+}
+[data-theme='dark'] .hams-profile-btn small {
+  color: #94a3b8;
+}
+[data-theme='dark'] .hams-page-transition {
+  color: #e2e8f0;
 }

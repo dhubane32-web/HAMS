@@ -32,3 +32,10 @@ HAMS is a full Airline Management System for Hawana Airways.
 5. Start frontend: `npm run dev:frontend`
 
 Login seed users are provided in `database/seed.sql`.
+
+## Branding source lock
+
+- Official source of truth: `frontend/public/brand/source/Hawana Logo Monotone.pdf`
+- Generate brand assets from source: `cd frontend && npm run brand:build`
+- Generated outputs: `frontend/public/brand/hawana-logo.png`, `hawana-logo-dark.png`, `favicon.ico` (and optional `hawana-logo.svg` via `pdf2svg`)
+- Duplicate or legacy source PDF files are blocked by the brand build script

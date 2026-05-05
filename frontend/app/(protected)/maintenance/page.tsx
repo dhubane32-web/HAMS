@@ -88,7 +88,10 @@ export default function MaintenancePage() {
   }
 
   useEffect(() => {
+    // Initial fetch on mount for maintenance workspace data.
     void loadData();
+    // loadData is intentionally mount-only here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function submitDefect(event: FormEvent<HTMLFormElement>) {

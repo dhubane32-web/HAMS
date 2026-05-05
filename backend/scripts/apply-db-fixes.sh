@@ -8,6 +8,7 @@ if [[ -z "${DATABASE_URL:-}" ]]; then
   exit 1
 fi
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$ROOT/database/auth_audit_extensions.sql"
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$ROOT/database/security_hardening.sql"
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$ROOT/database/auth_hawana_admin.sql"
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$ROOT/database/master_data.sql"
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$ROOT/database/master_data_seed.sql"
@@ -33,6 +34,6 @@ psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$ROOT/database/customer_service.sql"
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$ROOT/database/customer_service_seed.sql"
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$ROOT/database/sales_marketing.sql"
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$ROOT/database/sales_commercial_platform.sql"
-psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$ROOT/database/rm_seat_inventory.sql"
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$ROOT/database/migrations/001_sm_seat_leg_allocation.sql"
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$ROOT/database/sales_marketing_seed.sql"
 echo "Done. Restart the backend if it was running."

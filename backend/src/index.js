@@ -1,7 +1,19 @@
+import { pool } from './config/db.js';
+import { validateProductionEnv } from './config/envValidation.js';
+
+validateProductionEnv();
+
 import express from 'express';
 import cors from 'cors';
-import { pool } from './config/db.js';
+import cookieParser from 'cookie-parser';
+import { attachSecurityHeaders } from './middleware/securityHeaders.js';
+import { trustedOriginMutations } from './middleware/trustedOriginMutations.js';
+import { apiLimiter, authPasswordResetLimiter } from './middleware/apiRateLimits.js';
+import { bearerFromCookie } from './middleware/bearerFromCookie.js';
+import { sanitizeBody } from './middleware/sanitizeBody.js';
+import { productionErrorHandler } from './middleware/productionErrors.js';
 import authRoutes from './routes/auth.js';
+import authTotpRoutes from './routes/auth-totp.js';
 import bookingRoutes from './routes/modules/booking.js';
 import checkinRoutes from './routes/modules/checkin.js';
 import boardingRoutes from './routes/modules/boarding.js';
@@ -11,11 +23,13 @@ import maintenanceRoutes from './routes/modules/maintenance.js';
 import dashboardRoutes from './routes/modules/dashboard.js';
 import masterDataRoutes from './routes/modules/master-data.js';
 import systemAdminRoutes from './routes/modules/system-administration.js';
+import { adminIpAllowlist } from './middleware/adminIpAllowlist.js';
 import crewRoutes from './routes/modules/crew.js';
 import salesRoutes from './routes/modules/sales.js';
 import { salesCommercialRouter } from './routes/modules/salesCommercialExtras.js';
 import customerServiceRoutes from './routes/modules/customer-service.js';
 import reportsAnalyticsRoutes from './routes/modules/reports-analytics.js';
+import { startBackupScheduler } from './services/backupScheduler.js';
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -31,6 +45,8 @@ function parseOrigins(value) {
 }
 
 const configuredOrigins = parseOrigins(process.env.FRONTEND_URL);
+
+attachSecurityHeaders(app);
 
 app.use(
   cors({
@@ -49,21 +65,35 @@ app.use(
       }
       callback(null, false);
     },
-    credentials: false
+    credentials: true
   })
 );
-app.use(express.json());
 
-app.get('/api/health', async (_req, res) => {
+app.use(cookieParser());
+app.use(bearerFromCookie);
+app.use(trustedOriginMutations);
+app.use(express.json({ limit: '1mb' }));
+app.use(sanitizeBody);
+
+async function healthHandler(_req, res) {
   try {
     await pool.query('SELECT 1');
     res.status(200).json({ status: 'ok', service: 'hams-backend' });
   } catch (error) {
-    res.status(500).json({ status: 'error', error: error.message });
+    res.status(500).json({ status: 'error', message: isProd ? 'unhealthy' : error.message });
   }
-});
+}
+
+app.get('/health', healthHandler);
+app.get('/api/health', healthHandler);
+
+app.use('/api/auth/forgot-password', authPasswordResetLimiter);
+app.use('/api/auth/reset-password', authPasswordResetLimiter);
+
+app.use('/api/', apiLimiter);
 
 app.use('/api/auth', authRoutes);
+app.use('/api/auth', authTotpRoutes);
 app.use('/api/booking', bookingRoutes);
 app.use('/api/bookings', bookingRoutes);
 app.use('/api/checkin', checkinRoutes);
@@ -73,13 +103,43 @@ app.use('/api/operations', operationsRoutes);
 app.use('/api/maintenance', maintenanceRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/master-data', masterDataRoutes);
-app.use('/api/system', systemAdminRoutes);
+app.use('/api/system', adminIpAllowlist, systemAdminRoutes);
 app.use('/api/crew', crewRoutes);
 app.use('/api/sales/commercial', salesCommercialRouter);
 app.use('/api/sales', salesRoutes);
 app.use('/api/customer-service', customerServiceRoutes);
 app.use('/api/reports-analytics', reportsAnalyticsRoutes);
 
-app.listen(PORT, () => {
-  console.log(`HAMS backend running on http://localhost:${PORT}`);
+app.use((_req, res) => {
+  res.status(404).json({ message: 'Not found.' });
 });
+
+app.use(productionErrorHandler);
+
+async function start() {
+  try {
+    await pool.query('SELECT 1');
+    console.log('Database connection verified.');
+  } catch (err) {
+    console.error('FATAL: Database connection failed. Check DATABASE_URL in backend/.env');
+    console.error(err?.message || err);
+    process.exit(1);
+  }
+
+  const server = app.listen(PORT, () => {
+    console.log(`HAMS backend running on http://localhost:${PORT}`);
+  });
+  startBackupScheduler();
+  server.on('error', (err) => {
+    if (err && err.code === 'EADDRINUSE') {
+      console.error(
+        `FATAL: Port ${PORT} is already in use. Choose a free PORT in backend/.env and set frontend/.env.local NEXT_PUBLIC_API_URL to the same host/port. ` +
+          `On macOS, port 5000 is often used by AirPlay Receiver (System Settings → General → AirDrop & Handoff).`
+      );
+      process.exit(1);
+    }
+    throw err;
+  });
+}
+
+start();

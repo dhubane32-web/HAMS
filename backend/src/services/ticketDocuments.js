@@ -5,10 +5,15 @@
 import PDFDocument from 'pdfkit';
 import QRCode from 'qrcode';
 import nodemailer from 'nodemailer';
+import {
+  HAWANA_BRAND,
+  readOptionalBrandLogoPng,
+  drawStandardDocumentHeader,
+  drawStandardPdfFooter
+} from '../lib/hawanaBranding.js';
 
-const AIRLINE_NAME = 'Hawana Airways';
-const AIRLINE_TAGLINE = 'Your journey, elevated.';
-const BRAND_HEX = '#0d47a1';
+const AIRLINE_NAME = HAWANA_BRAND.airlineName;
+const BRAND_HEX = HAWANA_BRAND.primaryHex;
 
 function money(n) {
   const x = Number(n);
@@ -56,6 +61,13 @@ function tripTypeLabel(tt) {
   if (u === 'RETURN') return 'Return';
   if (u === 'ONE_WAY') return 'One way';
   return tt || '—';
+}
+
+/** E-ticket panel: airline-standard wording; cancelled remains explicit. */
+function eticketBookingStatusLine(bookingStatus) {
+  const u = String(bookingStatus || '').toUpperCase().replace(/\s+/g, '_');
+  if (u.includes('CANCEL')) return u.replace(/_/g, ' ');
+  return 'CONFIRMED';
 }
 
 /**
@@ -117,7 +129,7 @@ function pdfBufferFromBuilderA4(buildFn) {
     const doc = new PDFDocument({
       size: 'A4',
       margin: 40,
-      info: { Producer: 'HAMS', Creator: AIRLINE_NAME, Title: 'Electronic ticket' }
+      info: { Producer: 'Ticketing Platform', Creator: AIRLINE_NAME, Title: 'Electronic ticket' }
     });
     const chunks = [];
     doc.on('data', (c) => chunks.push(c));
@@ -261,20 +273,9 @@ export async function loadBookingDocumentContext(pool, bookingId) {
   };
 }
 
-function drawBrandHeader(doc, title) {
-  doc.save();
-  doc.rect(0, 0, doc.page.width, 72).fillColor(BRAND_HEX).fill();
-  doc.fillColor('#ffffff').fontSize(18).text(AIRLINE_NAME, 48, 22, { continued: false });
-  doc.fontSize(9).text(AIRLINE_TAGLINE, 48, 46);
-  doc.fontSize(11).text(title, 48, 58);
-  doc.restore();
-  doc.fillColor('#111111').fontSize(10);
-  doc.y = 88;
-}
-
 function pdfBufferFromBuilder(buildFn) {
   return new Promise((resolve, reject) => {
-    const doc = new PDFDocument({ size: 'LETTER', margin: 48, info: { Producer: 'HAMS' } });
+    const doc = new PDFDocument({ size: 'LETTER', margin: 48, info: { Producer: 'Ticketing Platform' } });
     const chunks = [];
     doc.on('data', (c) => chunks.push(c));
     doc.on('end', () => resolve(Buffer.concat(chunks)));
@@ -309,8 +310,9 @@ export async function buildEticketPdfBuffer(ctx) {
   const { ticket, passenger, flights, seatByFlight, perPaxTotal, fareLines, paxCount } = ctx;
   const pnr = ticket.pnr;
   const tkt = ticket.ticket_number;
-  const qrPayload = `HAMS|${pnr}|${tkt}|${ticket.booking_id}`;
+  const qrPayload = `ETKT|${pnr}|${tkt}|${ticket.booking_id}`;
   const qrPng = await QRCode.toBuffer(qrPayload, { type: 'png', margin: 1, width: 200, errorCorrectionLevel: 'M' });
+  const headerLogoBuf = readOptionalBrandLogoPng();
 
   const name = `${passenger.first_name || ''} ${passenger.last_name || ''}`.trim() || 'Passenger';
   const fare = computeFareBreakdown(ctx);
@@ -323,7 +325,7 @@ export async function buildEticketPdfBuffer(ctx) {
     const mb = doc.page.margins.bottom;
     const pw = doc.page.width - ml - pr;
     const pageH = doc.page.height;
-    const footerTop = pageH - mb - 40;
+    const footerTop = pageH - mb - 80;
 
     const qrCol = 118;
     const gutter = 14;
@@ -331,27 +333,26 @@ export async function buildEticketPdfBuffer(ctx) {
 
     let y = mt;
 
-    /* ----- Header band + document title ----- */
-    doc.save();
-    doc.rect(ml, y, pw, 52).fill(BRAND_HEX);
-    doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(18).text(AIRLINE_NAME, ml + 16, y + 12, { width: pw - 100 });
-    doc.font('Helvetica').fontSize(9).opacity(0.95).text(AIRLINE_TAGLINE, ml + 16, y + 34, { width: pw - 100 });
-    doc.opacity(1);
-    doc.rect(ml + pw - 72, y + 9, 56, 34).fill('#ffffff');
-    doc.rect(ml + pw - 72, y + 9, 56, 34).strokeColor('#e2e8f0').lineWidth(0.45).stroke();
-    doc.fillColor(BRAND_HEX).font('Helvetica-Bold').fontSize(15).text('HA', ml + pw - 72, y + 17, { width: 56, align: 'center' });
-    doc.restore();
-    y += 52;
-
-    doc.save();
-    doc.rect(ml, y, pw, 36).fill('#f1f5f9').strokeColor('#cbd5e1').lineWidth(0.75).stroke();
-    doc.fillColor(BRAND_HEX).font('Helvetica-Bold').fontSize(16).text('Electronic Ticket', ml + 16, y + 10);
-    doc.fillColor('#64748b').font('Helvetica').fontSize(10).text('/ E-Ticket', ml + 148, y + 13);
-    doc.restore();
-    y += 40;
+    const headerH = drawStandardDocumentHeader(doc, 'Electronic Ticket', {
+      logoBuf: headerLogoBuf,
+      marginLeft: ml,
+      pageWidth: pw,
+      y: mt,
+      bandHeight: 130,
+      innerPadX: 26,
+      innerPadY: 24,
+      logoSlotW: 320,
+      logoMaxW: 280,
+      logoMaxH: 110,
+      bandColor: '#FFFFFF',
+      theme: 'light',
+      accentBarHeight: 5,
+      accentBarColor: BRAND_HEX
+    });
+    y = mt + headerH + 8;
 
     const qrX = ml + mainW + gutter;
-    const qrY = mt + 56;
+    const qrY = mt + headerH + 4;
     const qrSize = 102;
     doc.image(qrPng, qrX, qrY, { width: qrSize, height: qrSize });
     doc.font('Helvetica').fontSize(7.5).fillColor('#475569').text('Scan for PNR / ticket verification', qrX, qrY + qrSize + 5, {
@@ -360,21 +361,21 @@ export async function buildEticketPdfBuffer(ctx) {
     });
     doc.font('Helvetica').fontSize(7).fillColor('#94a3b8').text(tkt, qrX, qrY + qrSize + 18, { width: qrCol, align: 'center' });
 
-    /* ----- Ticket information panel (background first, then text) ----- */
+    /* ----- Current ticket information (PNR, ticket, passenger, booking status, issue date only) ----- */
     const panelPad = 12;
+    const infoRowCount = 5;
     const infoBoxTop = y + 6;
-    const infoBoxH = 128;
+    /* Title + rows + padding (title may wrap on narrow layouts). */
+    const infoBoxH = 10 + 18 + infoRowCount * 13 + 12;
     doc.rect(ml, infoBoxTop, mainW, infoBoxH).fill('#ffffff');
     doc.rect(ml, infoBoxTop, mainW, infoBoxH).strokeColor('#e2e8f0').lineWidth(0.65).stroke();
 
     let py = infoBoxTop + 10;
-    py = drawSectionTitle(doc, ml + panelPad, py, mainW - panelPad * 2, 'Ticket information');
+    py = drawSectionTitle(doc, ml + panelPad, py, mainW - panelPad * 2, 'Current ticket information');
     py = drawInfoRow(doc, ml + panelPad, py, mainW - panelPad * 2, 'PNR', pnr);
     py = drawInfoRow(doc, ml + panelPad, py, mainW - panelPad * 2, 'Ticket number', tkt);
     py = drawInfoRow(doc, ml + panelPad, py, mainW - panelPad * 2, 'Passenger name', name);
-    py = drawInfoRow(doc, ml + panelPad, py, mainW - panelPad * 2, 'Status', ticket.ticket_status || '—');
-    py = drawInfoRow(doc, ml + panelPad, py, mainW - panelPad * 2, 'Booking status', ticket.booking_status || '—');
-    py = drawInfoRow(doc, ml + panelPad, py, mainW - panelPad * 2, 'Payment status', ticket.payment_status || '—');
+    py = drawInfoRow(doc, ml + panelPad, py, mainW - panelPad * 2, 'Booking status', eticketBookingStatusLine(ticket.booking_status));
     py = drawInfoRow(doc, ml + panelPad, py, mainW - panelPad * 2, 'Issue date', formatIssueDate(ticket.issued_at));
 
     y = infoBoxTop + infoBoxH + 14;
@@ -425,13 +426,13 @@ export async function buildEticketPdfBuffer(ctx) {
 
     y = itBoxTop + itBoxH + 14;
 
-    /* ----- Fare breakdown (this passenger) ----- */
+    /* ----- Fare breakdown ----- */
     const fareBoxTop = y;
     const fareBoxH = 112;
     doc.rect(ml, fareBoxTop, mainW, fareBoxH).fill('#ffffff');
     doc.rect(ml, fareBoxTop, mainW, fareBoxH).strokeColor('#e2e8f0').lineWidth(0.65).stroke();
     py = fareBoxTop + 10;
-    py = drawSectionTitle(doc, ml + panelPad, py, mainW - panelPad * 2, 'Fare & charges (this passenger)');
+    py = drawSectionTitle(doc, ml + panelPad, py, mainW - panelPad * 2, 'Fare & charges');
     doc.font('Helvetica').fontSize(7.5).fillColor('#64748b').text(`${paxCount} passenger(s) on booking · amounts in ${fare.currency}`, ml + panelPad, py);
     py += 14;
 
@@ -454,22 +455,28 @@ export async function buildEticketPdfBuffer(ctx) {
     py += 8;
     rowLine('Total paid (per passenger)', fare.total, true);
 
-    /* ----- Footer (fixed) ----- */
+    /* ----- Footer (fixed): no additional brand text/logo for e-ticket ----- */
     doc.font('Helvetica').fontSize(8).fillColor('#475569');
-    doc.text('Present this document or QR code at check-in.', ml, footerTop, { width: pw, align: 'center' });
-    doc.text('This ticket is electronically generated and valid without signature.', ml, footerTop + 12, {
+    doc.text('Present this document or QR code at check-in.', ml, footerTop - 40, { width: pw, align: 'center' });
+    doc.text('This ticket is electronically generated and valid without signature.', ml, footerTop - 26, {
       width: pw,
       align: 'center'
     });
-    doc.fontSize(7).fillColor('#94a3b8').text(`${AIRLINE_NAME} · Ref: ${pnr} / ${tkt}`, ml, footerTop + 28, { width: pw, align: 'center' });
+    doc.fontSize(7).fillColor('#94a3b8').text(`Ref: ${pnr} / ${tkt}`, ml, footerTop - 12, { width: pw, align: 'center' });
+    doc.fontSize(6.5).fillColor('#94a3b8').text('Generated by ticketing service', ml, footerTop + 8, {
+      width: pw,
+      align: 'center'
+    });
   });
 }
 
 export async function buildInvoicePdfBuffer(ctx) {
   const { booking, flights, passengers, fareLines } = ctx;
+  const logoBuf = readOptionalBrandLogoPng();
   return pdfBufferFromBuilder((doc) => {
-    drawBrandHeader(doc, 'Booking invoice');
+    const bh = drawStandardDocumentHeader(doc, 'Booking invoice', { logoBuf });
     doc.x = 48;
+    doc.y = bh + 16;
     doc.fontSize(10).fillColor('#111');
     doc.text(`PNR: ${booking.pnr}`);
     doc.text(`Trip: ${booking.trip_type} · Status: ${booking.booking_status} · Payment: ${booking.payment_status}`);
@@ -507,13 +514,16 @@ export async function buildInvoicePdfBuffer(ctx) {
     doc.moveDown(0.3);
     doc.font('Helvetica-Bold').text(`Total: ${money(booking.total_amount)} ${booking.currency}`);
     doc.font('Helvetica');
+    drawStandardPdfFooter(doc, 48, doc.page.height - 88, doc.page.width - 96, { withLogo: true, logoBuf });
   });
 }
 
 export async function buildReceiptPdfBuffer({ booking, payment }) {
+  const logoBuf = readOptionalBrandLogoPng();
   return pdfBufferFromBuilder((doc) => {
-    drawBrandHeader(doc, 'Payment receipt');
+    const bh = drawStandardDocumentHeader(doc, 'Payment receipt', { logoBuf });
     doc.x = 48;
+    doc.y = bh + 16;
     doc.fontSize(10).fillColor('#111');
     doc.text(`PNR: ${booking.pnr}`);
     doc.text(`Receipt for payment ${payment.id}`);
@@ -523,6 +533,7 @@ export async function buildReceiptPdfBuffer({ booking, payment }) {
     doc.text(`Processed: ${formatWhen(payment.processed_at)}`);
     doc.moveDown();
     doc.fontSize(8).fillColor('#64748b').text('Retain for your records. This is not a travel document.');
+    drawStandardPdfFooter(doc, 48, doc.page.height - 88, doc.page.width - 96, { withLogo: true, logoBuf });
   });
 }
 
@@ -544,6 +555,14 @@ export function isSmtpConfigured() {
   return Boolean(process.env.SMTP_HOST && process.env.SMTP_FROM);
 }
 
+function escHtml(s) {
+  return String(s ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
 export async function sendEticketEmail({ to, subject, pdfBuffer, filename, pnr, ticketNo }) {
   const transport = getSmtpTransport();
   if (!transport) {
@@ -552,11 +571,41 @@ export async function sendEticketEmail({ to, subject, pdfBuffer, filename, pnr, 
     throw err;
   }
   const from = process.env.SMTP_FROM;
+  const logoBuf = readOptionalBrandLogoPng();
+  const attachments = [{ filename: filename || `e-ticket-${ticketNo}.pdf`, content: pdfBuffer, contentType: 'application/pdf' }];
+  if (logoBuf) {
+    attachments.push({
+      filename: 'hawana-logo.png',
+      content: logoBuf,
+      cid: 'hawana-brand-logo',
+      contentType: 'image/png'
+    });
+  }
+  const safePnr = escHtml(pnr);
+  const safeTkt = escHtml(ticketNo);
+  const brandHeader = logoBuf
+    ? `<div style="border-bottom:2px solid #0047AB;padding-bottom:14px;margin-bottom:16px">
+  <img src="cid:hawana-brand-logo" width="180" alt="${escHtml(AIRLINE_NAME)}" style="max-width:180px;height:auto;display:block" />
+  <p style="margin:10px 0 0;font-size:18px;font-weight:bold;color:#001f5b;letter-spacing:0.02em">${escHtml(AIRLINE_NAME)}</p>
+  <p style="margin:4px 0 0;font-size:12px;font-weight:600;color:#0047AB">${escHtml(HAWANA_BRAND.systemShort)} · ${escHtml(HAWANA_BRAND.tagline)}</p>
+</div>`
+    : `<div style="border-bottom:2px solid #0047AB;padding-bottom:14px;margin-bottom:16px">
+  <p style="margin:0;font-size:18px;font-weight:bold;color:#001f5b">${escHtml(AIRLINE_NAME)}</p>
+  <p style="margin:4px 0 0;font-size:12px;font-weight:600;color:#0047AB">${escHtml(HAWANA_BRAND.systemShort)} · ${escHtml(HAWANA_BRAND.tagline)}</p>
+</div>`;
+  const html = `<div style="font-family:Helvetica,Arial,sans-serif;color:#0f172a;max-width:560px">
+${brandHeader}
+  <p style="margin:0 0 12px;font-size:15px">Dear passenger,</p>
+  <p style="margin:0 0 12px;font-size:14px;line-height:1.5">Your electronic ticket <strong>${safeTkt}</strong> for PNR <strong>${safePnr}</strong> is attached as a PDF.</p>
+  <p style="margin:16px 0 0;font-size:13px;color:#64748b">${escHtml(AIRLINE_NAME)}<br/>${escHtml(HAWANA_BRAND.systemFull)}</p>
+</div>`;
+
   await transport.sendMail({
     from,
     to,
     subject: subject || `${AIRLINE_NAME} e-ticket ${ticketNo} · PNR ${pnr}`,
-    text: `Dear passenger,\n\nPlease find your electronic ticket (${ticketNo}) for PNR ${pnr} attached as a PDF.\n\n${AIRLINE_NAME}`,
-    attachments: [{ filename: filename || `e-ticket-${ticketNo}.pdf`, content: pdfBuffer, contentType: 'application/pdf' }]
+    text: `Dear passenger,\n\nPlease find your electronic ticket (${ticketNo}) for PNR ${pnr} attached as a PDF.\n\n${AIRLINE_NAME}\n${HAWANA_BRAND.systemFull}`,
+    html,
+    attachments
   });
 }

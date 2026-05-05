@@ -3,8 +3,21 @@ import { pool } from '../../config/db.js';
 import { requireAuth, requireRoles } from '../../middleware/auth.js';
 import { userHasAnyRole } from '../../lib/roles.js';
 import { canAccessReport, isAgentOnlySales, canFilterByAgent } from '../../lib/reportAccess.js';
+import { buildBrandedTablePdfBuffer, buildBrandedKpiPdfBuffer } from '../../services/brandedTablePdf.js';
 
 const router = express.Router();
+
+function fmtPdfAmt(n) {
+  const x = Number(n);
+  return Number.isFinite(x) ? x.toFixed(2) : '—';
+}
+
+function sendReportPdf(res, filename, buf) {
+  const safe = String(filename).replace(/"/g, '');
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `inline; filename="${safe}"`);
+  return res.status(200).send(buf);
+}
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -198,6 +211,24 @@ router.get('/kpis', async (req, res) => {
         : Promise.resolve({ rows: [{ c: null }] })
     ]);
 
+    if (String(req.query.format || '').toLowerCase() === 'pdf') {
+      const buf = await buildBrandedKpiPdfBuffer({
+        title: 'KPI export',
+        rangeLine: `Period: ${from} through ${to}`,
+        lines: [
+          { label: 'Bookings created', value: String(bookings.rows[0]?.c ?? 0) },
+          { label: 'Net payments in period', value: fmtPdfAmt(payments.rows[0]?.net ?? 0) },
+          { label: 'Check-ins', value: checkins.rows[0]?.c != null ? String(checkins.rows[0].c) : 'Not available' },
+          {
+            label: 'Customer service cases',
+            value: cases.rows[0]?.c != null ? String(cases.rows[0].c) : 'Not available'
+          }
+        ],
+        note: 'Figures follow your role visibility (e.g. agents are scoped to own sales).'
+      });
+      return sendReportPdf(res, `kpis-${from}-${to}.pdf`, buf);
+    }
+
     return res.status(200).json({
       from,
       to,
@@ -256,6 +287,26 @@ router.get('/reports/daily-sales', async (req, res) => {
        ORDER BY day ASC`,
       vals
     );
+
+    if (String(req.query.format || '').toLowerCase() === 'pdf') {
+      const buf = await buildBrandedTablePdfBuffer({
+        title: 'Sales report — daily collections',
+        subtitles: [`Operational / commercial · ${from} to ${to}`],
+        columns: [
+          { label: 'Day', width: 88 },
+          { label: 'Payments', width: 70 },
+          { label: 'Gross', width: 90 },
+          { label: 'Refunded (linked)', width: 100 }
+        ],
+        rows: r.rows.map((x) => [
+          x.day,
+          x.payment_count,
+          fmtPdfAmt(x.gross_collected),
+          fmtPdfAmt(x.refunded_on_payments)
+        ])
+      });
+      return sendReportPdf(res, `daily-sales-${from}-${to}.pdf`, buf);
+    }
 
     if (csv) {
       return sendCsv(res, `daily-sales-${from}-${to}.csv`, ['day', 'payment_count', 'gross_collected', 'refunded_on_payments'], r.rows.map((x) => [x.day, x.payment_count, x.gross_collected, x.refunded_on_payments]));
@@ -457,6 +508,23 @@ router.get('/reports/revenue', async (req, res) => {
       bookedVals
     );
 
+    if (String(req.query.format || '').toLowerCase() === 'pdf') {
+      const buf = await buildBrandedTablePdfBuffer({
+        title: 'Revenue report',
+        subtitles: [
+          `Period: ${from} to ${to}`,
+          `Itinerary fare (bookings created in range): ${fmtPdfAmt(booked.rows[0]?.itinerary_fare_booked ?? 0)}`
+        ],
+        columns: [
+          { label: 'Day', width: 92 },
+          { label: 'Net collected', width: 100 },
+          { label: 'Payment rows', width: 80 }
+        ],
+        rows: series.rows.map((x) => [x.day, fmtPdfAmt(x.net_collected), x.payment_rows])
+      });
+      return sendReportPdf(res, `revenue-${from}-${to}.pdf`, buf);
+    }
+
     if (String(req.query.format || '').toLowerCase() === 'csv') {
       return sendCsv(res, `revenue-${from}-${to}.csv`, ['day', 'net_collected', 'payment_rows'], series.rows.map((x) => [x.day, x.net_collected, x.payment_rows]));
     }
@@ -509,6 +577,26 @@ router.get('/reports/agent-sales', async (req, res) => {
       vals
     );
 
+    if (String(req.query.format || '').toLowerCase() === 'pdf') {
+      const buf = await buildBrandedTablePdfBuffer({
+        title: 'Sales report — agent performance',
+        subtitles: [`Period: ${from} to ${to}`, 'Agents (user role = agent) only.'],
+        columns: [
+          { label: 'Agent', width: 160 },
+          { label: 'Bookings', width: 70 },
+          { label: 'Booked gross', width: 90 },
+          { label: 'Net payments', width: 90 }
+        ],
+        rows: r.rows.map((x) => [
+          x.agent_name,
+          x.booking_count,
+          fmtPdfAmt(x.booked_gross),
+          fmtPdfAmt(x.net_payments)
+        ])
+      });
+      return sendReportPdf(res, `agent-sales-${from}-${to}.pdf`, buf);
+    }
+
     if (String(req.query.format || '').toLowerCase() === 'csv') {
       return sendCsv(
         res,
@@ -558,6 +646,29 @@ router.get('/reports/refunds', async (req, res) => {
         )
       : { rows: [] };
 
+    if (String(req.query.format || '').toLowerCase() === 'pdf') {
+      const buf = await buildBrandedTablePdfBuffer({
+        title: 'Refund activity report',
+        subtitles: [
+          `Period: ${from} to ${to}`,
+          `Pending refund requests in window: ${pending.rows.length}`
+        ],
+        columns: [
+          { label: 'Amount', width: 72 },
+          { label: 'Refunded at', width: 118 },
+          { label: 'PNR', width: 64 },
+          { label: 'Booking', width: 200 }
+        ],
+        rows: r.rows.slice(0, 2000).map((x) => [
+          fmtPdfAmt(x.refund_amount),
+          String(x.refunded_at || '').slice(0, 19),
+          x.pnr || '—',
+          String(x.booking_id || '')
+        ])
+      });
+      return sendReportPdf(res, `refunds-${from}-${to}.pdf`, buf);
+    }
+
     if (String(req.query.format || '').toLowerCase() === 'csv') {
       return sendCsv(
         res,
@@ -596,6 +707,30 @@ router.get('/reports/expenses', async (req, res) => {
        LIMIT 5000`,
       vals
     );
+
+    if (String(req.query.format || '').toLowerCase() === 'pdf') {
+      const buf = await buildBrandedTablePdfBuffer({
+        title: 'Operational expense report',
+        subtitles: [`Period: ${from} to ${to}`],
+        columns: [
+          { label: 'Date', width: 78 },
+          { label: 'Category', width: 88 },
+          { label: 'Amount', width: 64 },
+          { label: 'Curr', width: 34 },
+          { label: 'Flight', width: 56 },
+          { label: 'Description', width: 180 }
+        ],
+        rows: r.rows.slice(0, 2000).map((x) => [
+          String(x.incurred_on || '').slice(0, 10),
+          x.category,
+          fmtPdfAmt(x.amount),
+          x.currency,
+          x.flight_number || '—',
+          (x.description || '').slice(0, 80)
+        ])
+      });
+      return sendReportPdf(res, `expenses-${from}-${to}.pdf`, buf);
+    }
 
     if (String(req.query.format || '').toLowerCase() === 'csv') {
       return sendCsv(
@@ -714,6 +849,35 @@ router.get('/reports/flight-performance', async (req, res) => {
       vals
     );
 
+    if (String(req.query.format || '').toLowerCase() === 'pdf') {
+      const buf = await buildBrandedTablePdfBuffer({
+        title: 'Operational report — flight performance / load factor',
+        subtitles: [
+          `${from} to ${to}`,
+          'Shows bookings, tickets attributed to leg, check-ins and itinerary fare per flight.'
+        ],
+        columns: [
+          { label: 'Flight', width: 54 },
+          { label: 'Route', width: 52 },
+          { label: 'Departs', width: 100 },
+          { label: 'Bookings', width: 52 },
+          { label: 'Tickets', width: 48 },
+          { label: 'Check-in', width: 48 },
+          { label: 'Fare sum', width: 72 }
+        ],
+        rows: r.rows.slice(0, 2000).map((x) => [
+          x.flight_number,
+          `${x.departure_airport}-${x.arrival_airport}`,
+          String(x.departure_time || '').slice(0, 16),
+          x.booking_count,
+          x.tickets_on_leg,
+          x.checkin_count,
+          fmtPdfAmt(x.itinerary_fare_sum)
+        ])
+      });
+      return sendReportPdf(res, `flight-performance-${from}-${to}.pdf`, buf);
+    }
+
     if (String(req.query.format || '').toLowerCase() === 'csv') {
       return sendCsv(
         res,
@@ -784,6 +948,28 @@ router.get('/reports/route-performance', async (req, res) => {
       vals
     );
 
+    if (String(req.query.format || '').toLowerCase() === 'pdf') {
+      const buf = await buildBrandedTablePdfBuffer({
+        title: 'Operational report — route performance',
+        subtitles: [`${from} to ${to}`, 'Flight legs, bookings, check-ins and fare by airport pair'],
+        columns: [
+          { label: 'Route', width: 80 },
+          { label: 'Flights', width: 56 },
+          { label: 'Bookings', width: 72 },
+          { label: 'Check-ins', width: 72 },
+          { label: 'Fare sum', width: 92 }
+        ],
+        rows: r.rows.map((x) => [
+          x.route_label,
+          x.flight_count,
+          x.booking_leg_count,
+          x.checkin_count,
+          fmtPdfAmt(x.itinerary_fare_sum)
+        ])
+      });
+      return sendReportPdf(res, `route-performance-${from}-${to}.pdf`, buf);
+    }
+
     if (String(req.query.format || '').toLowerCase() === 'csv') {
       return sendCsv(
         res,
@@ -817,6 +1003,20 @@ router.get('/reports/crew-utilization', async (req, res) => {
       [from, to]
     );
 
+    if (String(req.query.format || '').toLowerCase() === 'pdf') {
+      const buf = await buildBrandedTablePdfBuffer({
+        title: 'Operational report — crew utilization',
+        subtitles: [`${from} to ${to}`, 'Block hours ≈ departure to arrival per crew assignment'],
+        columns: [
+          { label: 'Crew', width: 200 },
+          { label: 'Duties', width: 60 },
+          { label: 'Block hrs', width: 80 }
+        ],
+        rows: r.rows.map((x) => [x.full_name, x.duty_assignments, fmtPdfAmt(x.block_hours_approx)])
+      });
+      return sendReportPdf(res, `crew-utilization-${from}-${to}.pdf`, buf);
+    }
+
     if (String(req.query.format || '').toLowerCase() === 'csv') {
       return sendCsv(
         res,
@@ -847,6 +1047,21 @@ router.get('/reports/aircraft-utilization', async (req, res) => {
        ORDER BY block_hours_approx DESC NULLS LAST`,
       [from, to]
     );
+
+    if (String(req.query.format || '').toLowerCase() === 'pdf') {
+      const buf = await buildBrandedTablePdfBuffer({
+        title: 'Operational report — aircraft utilization',
+        subtitles: [`${from} to ${to}`, 'Block hours are approximate (flight arrival minus departure per leg)'],
+        columns: [
+          { label: 'Tail', width: 80 },
+          { label: 'Model', width: 120 },
+          { label: 'Legs', width: 56 },
+          { label: 'Block hrs', width: 72 }
+        ],
+        rows: r.rows.map((x) => [x.tail_number, x.model, x.flight_legs, Number(x.block_hours_approx ?? 0).toFixed(1)])
+      });
+      return sendReportPdf(res, `aircraft-utilization-${from}-${to}.pdf`, buf);
+    }
 
     if (String(req.query.format || '').toLowerCase() === 'csv') {
       return sendCsv(
@@ -900,6 +1115,23 @@ router.get('/reports/customer-service', async (req, res) => {
        ${scope}`,
       vals
     );
+
+    if (String(req.query.format || '').toLowerCase() === 'pdf') {
+      const refundLink = linkedRefunds.rows[0]?.cnt ?? 0;
+      const lines = [];
+      lines.push({ label: 'Cases linked to finance refund', value: String(refundLink) });
+      for (const x of byType.rows) lines.push({ label: `Cases by type · ${String(x.case_type)}`, value: String(x.cnt) });
+      for (const x of byStatus.rows) lines.push({ label: `Cases by status · ${String(x.status)}`, value: String(x.cnt) });
+      const buf = await buildBrandedKpiPdfBuffer({
+        title: 'Customer service summary',
+        rangeLine: `Period: ${from} to ${to}`,
+        lines,
+        note: userHasAnyRole(req.user.role, ['admin', 'super_admin', 'finance'])
+          ? 'Full case detail export is CSV/JSON.'
+          : 'Scoped to assignments visible to your role.'
+      });
+      return sendReportPdf(res, `customer-service-${from}-${to}.pdf`, buf);
+    }
 
     if (String(req.query.format || '').toLowerCase() === 'csv') {
       const rows = byType.rows.map((x) => ['by_type', x.case_type, x.cnt]);

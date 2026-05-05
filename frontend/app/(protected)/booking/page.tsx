@@ -2,13 +2,17 @@
 
 import { FormEvent, useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { CSSProperties } from 'react';
+import Link from 'next/link';
 import ConfirmModal from '@/components/ui/ConfirmModal';
 import { getPublicApiBaseUrl } from '@/lib/api-base';
 import {
   downloadBookingInvoicePdf,
+  downloadPaymentReceiptPdf,
   downloadTicketPdf,
   emailTicketPdf,
-  printTicketPdf
+  printTicketPdf,
+  regenerateTicketPdf,
+  viewTicketPdf
 } from '@/lib/booking-documents';
 
 type Flight = {
@@ -60,6 +64,28 @@ type TicketResponse = {
   pnr: string;
   bookingId: string;
   tickets: Array<{ id: string; ticket_number: string; issued_at: string; ticket_status?: string }>;
+};
+
+type RetrieveTicketMatch = {
+  bookingId: string;
+  ticketId: string | null;
+  pnr: string;
+  ticketNumber: string | null;
+  passengerFullName: string;
+  passengerEmail?: string;
+  routeSummary: string;
+  flightNumberSummary: string;
+  firstDepartureIso: string | null;
+  departureDate?: string | null;
+  seatSummary?: string;
+  cabinSummary?: string;
+  bookingStatus: string;
+  ticketStatus: string;
+  fareTotal: string;
+  currency: string;
+  flights: Array<{ leg_type?: string; flight_number: string; route: string; departure_time: string }>;
+  receiptPaymentId: string | null;
+  capabilities: { canReissue: boolean; canVoidRefund: boolean; canRegeneratePdf?: boolean };
 };
 
 type SearchResponse = {
@@ -129,6 +155,16 @@ export default function BookingPage() {
   const [issueTicketModalOpen, setIssueTicketModalOpen] = useState(false);
   const [issueTicketSubmitting, setIssueTicketSubmitting] = useState(false);
 
+  const [retrieveModalOpen, setRetrieveModalOpen] = useState(false);
+  const [retrievePnr, setRetrievePnr] = useState('');
+  const [retrieveLastName, setRetrieveLastName] = useState('');
+  const [retrieveLoading, setRetrieveLoading] = useState(false);
+  const [retrieveError, setRetrieveError] = useState('');
+  const [retrieveMatches, setRetrieveMatches] = useState<RetrieveTicketMatch[] | null>(null);
+  const [retrieveDocAction, setRetrieveDocAction] = useState<string | null>(null);
+  const [retrieveDocMessage, setRetrieveDocMessage] = useState('');
+  const [retrieveSearchSuccess, setRetrieveSearchSuccess] = useState(false);
+
   function getToken() {
     return localStorage.getItem('hams_token');
   }
@@ -160,6 +196,28 @@ export default function BookingPage() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const { hash, pathname, search } = window.location;
+    if (hash === '#retrieve') {
+      setRetrieveError('');
+      setRetrieveMatches(null);
+      setRetrieveDocMessage('');
+      setRetrieveSearchSuccess(false);
+      setRetrieveModalOpen(true);
+      window.history.replaceState(null, '', pathname + (search || ''));
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!retrieveModalOpen) return;
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape' && !retrieveLoading) setRetrieveModalOpen(false);
+    }
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [retrieveModalOpen, retrieveLoading]);
 
   useEffect(() => {
     let cancelled = false;
@@ -213,6 +271,14 @@ export default function BookingPage() {
     const d = new Date(iso);
     if (Number.isNaN(d.getTime())) return '—';
     return d.toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' });
+  }
+
+  function formatDepartureDateLabel(iso: string | undefined, dateOnly: string | null | undefined): string {
+    const raw = dateOnly && /^\d{4}-\d{2}-\d{2}$/.test(dateOnly) ? `${dateOnly}T12:00:00Z` : iso;
+    if (!raw) return '—';
+    const d = new Date(raw);
+    if (Number.isNaN(d.getTime())) return '—';
+    return d.toLocaleDateString(undefined, { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' });
   }
 
   function formatLegFare(f: Flight): string {
@@ -574,10 +640,123 @@ export default function BookingPage() {
     }
   }
 
+  async function submitRetrieveTicket(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setRetrieveError('');
+    setRetrieveDocMessage('');
+    setRetrieveSearchSuccess(false);
+    setRetrieveMatches(null);
+    const pnr = retrievePnr.trim().toUpperCase();
+    const lastName = retrieveLastName.trim();
+    if (!pnr) {
+      setRetrieveError('PNR is required.');
+      return;
+    }
+    if (!lastName) {
+      setRetrieveError('Passenger last name is required.');
+      return;
+    }
+    setRetrieveLoading(true);
+    try {
+      const token = getToken();
+      if (!token) {
+        setRetrieveError('Please sign in to retrieve a ticket.');
+        return;
+      }
+      const res = await fetch(`${API_BASE_URL}/api/bookings/retrieve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ pnr, lastName })
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        matches?: RetrieveTicketMatch[];
+        message?: string;
+      };
+      if (res.status === 404) {
+        setRetrieveMatches([]);
+        setRetrieveError(data.message || 'No ticket found for this PNR and last name.');
+        setRetrieveSearchSuccess(false);
+        return;
+      }
+      if (!res.ok) {
+        setRetrieveError(data.message || 'Ticket retrieval failed.');
+        setRetrieveSearchSuccess(false);
+        return;
+      }
+      const list = Array.isArray(data.matches) ? data.matches : [];
+      setRetrieveMatches(list);
+      setRetrieveSearchSuccess(list.length > 0);
+    } catch {
+      setRetrieveError('Unable to reach the booking service.');
+      setRetrieveSearchSuccess(false);
+    } finally {
+      setRetrieveLoading(false);
+    }
+  }
+
+  function openRetrieveTicketModal() {
+    setRetrieveError('');
+    setRetrieveDocMessage('');
+    setRetrieveSearchSuccess(false);
+    setRetrieveMatches(null);
+    setRetrieveModalOpen(true);
+  }
+
   return (
-    <main style={{ padding: '2rem', display: 'grid', gap: '1rem' }}>
-      <h1 style={{ margin: 0, color: '#0d47a1' }}>Flight Booking Module</h1>
-      <p style={{ marginTop: 0 }}>Search flights, create booking with PNR, and issue ticket.</p>
+    <main style={{ display: 'flex', flexDirection: 'column', gap: 0, padding: 0, minHeight: '100%' }}>
+      <div
+        style={{
+          position: 'sticky',
+          top: 0,
+          zIndex: 25,
+          display: 'flex',
+          flexWrap: 'wrap',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: '0.75rem',
+          padding: '0.75rem clamp(1rem, 3vw, 1.75rem)',
+          background: 'linear-gradient(180deg, #f8fafc 0%, #eef2f7 100%)',
+          borderBottom: '1px solid #cbd5e1',
+          boxShadow: '0 2px 6px rgba(15, 23, 42, 0.06)'
+        }}
+      >
+        <div
+          style={{
+            fontSize: '0.72rem',
+            fontWeight: 800,
+            letterSpacing: '0.06em',
+            textTransform: 'uppercase',
+            color: '#475569'
+          }}
+        >
+          Booking &amp; Ticketing · Actions
+        </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'center' }}>
+          <button type="button" style={{ ...buttonStyle, width: 'auto', fontSize: '0.9rem' }} onClick={() => openRetrieveTicketModal()}>
+            Retrieve Ticket
+          </button>
+          <Link
+            href="/bookings"
+            style={{
+              ...cancelButtonStyle,
+              textDecoration: 'none',
+              display: 'inline-flex',
+              alignItems: 'center',
+              fontSize: '0.88rem'
+            }}
+          >
+            Bookings list →
+          </Link>
+        </div>
+      </div>
+
+      <div style={{ padding: 'clamp(1rem, 2.5vw, 2rem)', display: 'grid', gap: '1rem' }}>
+      <div>
+        <h1 style={{ margin: 0, color: '#0d47a1' }}>Flight Booking Module</h1>
+        <p style={{ marginTop: '0.35rem', marginBottom: 0, color: '#475569' }}>
+          Search flights, create booking with PNR, and issue ticket.
+        </p>
+      </div>
 
       <section style={cardStyle}>
         <h2 style={h2Style}>1) Search Flights</h2>
@@ -971,9 +1150,14 @@ export default function BookingPage() {
               </details>
             </div>
           )}
-          <button type="submit" style={buttonStyle} disabled={isBooking}>
-            {isBooking ? 'Creating booking...' : 'Create Booking'}
-          </button>
+          <div style={{ gridColumn: '1 / -1', display: 'flex', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'center' }}>
+            <button type="submit" style={buttonStyle} disabled={isBooking}>
+              {isBooking ? 'Creating booking...' : 'Create Booking'}
+            </button>
+            <button type="button" style={{ ...buttonStyle, width: 'auto' }} onClick={() => openRetrieveTicketModal()}>
+              Retrieve Ticket
+            </button>
+          </div>
         </form>
         <p style={{ marginTop: '0.5rem' }}>
           Estimated fare: <strong>
@@ -1108,6 +1292,403 @@ export default function BookingPage() {
         ) : null}
       </ConfirmModal>
 
+      {retrieveModalOpen ? (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 60,
+            background: 'rgba(15, 23, 42, 0.5)',
+            display: 'grid',
+            placeItems: 'center',
+            padding: '1rem'
+          }}
+          role="presentation"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget && !retrieveLoading) {
+              setRetrieveSearchSuccess(false);
+              setRetrieveModalOpen(false);
+            }
+          }}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="retrieve-ticket-title"
+            style={{
+              ...cardStyle,
+              width: 'min(100%, calc(100vw - 2rem))',
+              maxWidth: 720,
+              maxHeight: 'min(90vh, 820px)',
+              overflow: 'auto',
+              border: '1px solid #e2e8f0'
+            }}
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <div style={{ marginBottom: '0.75rem' }}>
+              <h2 id="retrieve-ticket-title" style={{ ...h2Style, margin: 0 }}>
+                Retrieve Ticket
+              </h2>
+            </div>
+            <p style={{ margin: '0 0 0.75rem', fontSize: '0.88rem', color: '#475569' }}>
+              Enter the booking PNR and the passenger&apos;s last name as on the ticket. Only matching tickets are returned.
+            </p>
+            <form
+              onSubmit={(e) => void submitRetrieveTicket(e)}
+              style={{
+                ...gridStyle,
+                gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 220px), 1fr))'
+              }}
+            >
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <span style={{ fontSize: '0.78rem', fontWeight: 700, color: '#64748b' }}>PNR</span>
+                <input
+                  value={retrievePnr}
+                  onChange={(e) => setRetrievePnr(e.target.value.toUpperCase())}
+                  placeholder="e.g. ABC12X"
+                  style={inputStyle}
+                  autoComplete="off"
+                />
+              </label>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <span style={{ fontSize: '0.78rem', fontWeight: 700, color: '#64748b' }}>Last Name</span>
+                <input
+                  value={retrieveLastName}
+                  onChange={(e) => setRetrieveLastName(e.target.value)}
+                  placeholder="Surname on ticket"
+                  style={inputStyle}
+                  autoComplete="family-name"
+                />
+              </label>
+              <div
+                style={{
+                  gridColumn: '1 / -1',
+                  display: 'flex',
+                  flexWrap: 'wrap',
+                  gap: '0.5rem',
+                  alignItems: 'center'
+                }}
+              >
+                <button type="submit" style={{ ...buttonStyle, width: 'auto', minWidth: '9.5rem' }} disabled={retrieveLoading}>
+                  {retrieveLoading ? 'Searching ticket...' : 'Search Ticket'}
+                </button>
+                <button
+                  type="button"
+                  style={{ ...cancelButtonStyle, minWidth: '7rem' }}
+                  disabled={retrieveLoading}
+                  onClick={() => {
+                    if (retrieveLoading) return;
+                    setRetrieveModalOpen(false);
+                    setRetrieveError('');
+                    setRetrieveDocMessage('');
+                    setRetrieveSearchSuccess(false);
+                    setRetrieveMatches(null);
+                  }}
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+            {retrieveSearchSuccess && retrieveMatches && retrieveMatches.length > 0 ? (
+              <p style={{ marginTop: '0.75rem', color: '#047857', fontWeight: 600, fontSize: '0.88rem' }}>
+                Ticket retrieved successfully
+              </p>
+            ) : null}
+            {retrieveDocMessage ? (
+              <p style={{ marginTop: '0.5rem', color: '#047857', fontWeight: 600, fontSize: '0.88rem' }}>{retrieveDocMessage}</p>
+            ) : null}
+            {retrieveError ? (
+              retrieveMatches && retrieveMatches.length === 0 ? (
+                <div
+                  role="alert"
+                  style={{
+                    marginTop: '0.75rem',
+                    padding: '0.85rem 1rem',
+                    borderRadius: 10,
+                    border: '1px solid #fecaca',
+                    background: '#fef2f2',
+                    color: '#991b1b',
+                    fontSize: '0.88rem'
+                  }}
+                >
+                  <p style={{ margin: 0, fontWeight: 700 }}>No ticket found</p>
+                  <p style={{ margin: '0.35rem 0 0' }}>{retrieveError}</p>
+                </div>
+              ) : (
+                <p style={{ ...errorStyle, marginTop: '0.75rem' }}>{retrieveError}</p>
+              )
+            ) : null}
+            {retrieveMatches && retrieveMatches.length > 0 ? (
+              <div style={{ marginTop: '1rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                <h3 style={{ ...h3Style, fontSize: '1rem', marginBottom: 0 }}>Ticket summary</h3>
+                <div
+                  style={{
+                    overflowX: 'auto',
+                    WebkitOverflowScrolling: 'touch',
+                    borderRadius: 10,
+                    border: '1px solid #e2e8f0',
+                    background: '#fff'
+                  }}
+                >
+                  <table style={{ ...flightTableStyle, minWidth: 720, margin: 0 }}>
+                    <thead>
+                      <tr>
+                        <th style={thStyle}>Passenger name</th>
+                        <th style={thStyle}>PNR</th>
+                        <th style={thStyle}>Ticket number</th>
+                        <th style={thStyle}>Route</th>
+                        <th style={thStyle}>Flight number</th>
+                        <th style={thStyle}>Date</th>
+                        <th style={thStyle}>Seat</th>
+                        <th style={thStyle}>Cabin</th>
+                        <th style={thStyle}>Fare</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {retrieveMatches.map((m, idx) => (
+                        <tr key={`${m.ticketId || m.bookingId}-${idx}`}>
+                          <td style={tdStyle}>{m.passengerFullName}</td>
+                          <td style={tdStyle}>
+                            <strong>{m.pnr}</strong>
+                          </td>
+                          <td style={tdStyle}>{m.ticketNumber || '—'}</td>
+                          <td style={{ ...tdStyle, whiteSpace: 'nowrap' }}>{m.routeSummary}</td>
+                          <td style={tdStyle}>{m.flightNumberSummary}</td>
+                          <td style={tdStyle}>
+                            {formatDepartureDateLabel(m.firstDepartureIso || undefined, m.departureDate)}
+                          </td>
+                          <td style={tdStyle}>{m.seatSummary != null && m.seatSummary !== '' ? m.seatSummary : '—'}</td>
+                          <td style={tdStyle}>{m.cabinSummary != null && m.cabinSummary !== '' ? m.cabinSummary : '—'}</td>
+                          <td style={{ ...tdStyle, fontWeight: 700 }}>
+                            {m.fareTotal} {m.currency}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                {retrieveMatches.map((m) => {
+                  const ticketId = m.ticketId || '';
+                  const hasTicket = Boolean(ticketId);
+                  const loadingVw = hasTicket && retrieveDocAction === `rt-vw:${ticketId}`;
+                  const loadingDl = hasTicket && retrieveDocAction === `rt-dl:${ticketId}`;
+                  const loadingPr = hasTicket && retrieveDocAction === `rt-pr:${ticketId}`;
+                  const loadingEm = hasTicket && retrieveDocAction === `rt-em:${ticketId}`;
+                  const loadingRg = hasTicket && retrieveDocAction === `rt-rg:${ticketId}`;
+                  const loadingInv = retrieveDocAction === `rt-inv:${m.bookingId}`;
+                  const loadingRc =
+                    m.receiptPaymentId && retrieveDocAction === `rt-rc:${m.bookingId}:${m.receiptPaymentId}`;
+                  const rtBtn: CSSProperties = {
+                    ...selectFlightBtnStyle,
+                    width: 'auto',
+                    minHeight: '2.35rem'
+                  };
+                  return (
+                    <div
+                      key={`${m.ticketId || m.bookingId}-actions`}
+                      style={{
+                        border: '1px solid #e2e8f0',
+                        borderRadius: 10,
+                        padding: 'clamp(0.65rem, 2vw, 0.9rem)',
+                        background: '#f8fafc'
+                      }}
+                    >
+                      <p style={{ margin: '0 0 0.5rem', fontSize: '0.78rem', fontWeight: 800, color: '#475569', letterSpacing: '0.04em' }}>
+                        ACTIONS · {m.ticketNumber || 'NO TICKET NUMBER'}
+                        {m.passengerEmail ? (
+                          <span style={{ fontWeight: 500, color: '#64748b' }}> · {m.passengerEmail}</span>
+                        ) : null}
+                      </p>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'stretch' }}>
+                        <button
+                          type="button"
+                          disabled={Boolean(retrieveDocAction) || !hasTicket}
+                          style={{ ...rtBtn, background: '#0d47a1' }}
+                          onClick={() => {
+                            if (!hasTicket) return;
+                            setRetrieveDocAction(`rt-vw:${ticketId}`);
+                            void viewTicketPdf(m.bookingId, ticketId)
+                              .catch((e: Error) => {
+                                setRetrieveDocMessage('');
+                                setRetrieveError(e.message);
+                              })
+                              .finally(() => setRetrieveDocAction(null));
+                          }}
+                        >
+                          {loadingVw ? 'Opening...' : 'View Ticket'}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={Boolean(retrieveDocAction) || !hasTicket}
+                          style={{ ...rtBtn, background: '#0f766e' }}
+                          onClick={() => {
+                            if (!hasTicket) return;
+                            setRetrieveDocAction(`rt-dl:${ticketId}`);
+                            void downloadTicketPdf(m.bookingId, ticketId, m.ticketNumber || m.pnr)
+                              .catch((e: Error) => {
+                                setRetrieveDocMessage('');
+                                setRetrieveError(e.message);
+                              })
+                              .finally(() => setRetrieveDocAction(null));
+                          }}
+                        >
+                          {loadingDl ? 'Downloading...' : 'Download PDF'}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={Boolean(retrieveDocAction) || !hasTicket}
+                          style={{ ...rtBtn, background: '#334155' }}
+                          onClick={() => {
+                            if (!hasTicket) return;
+                            setRetrieveDocAction(`rt-pr:${ticketId}`);
+                            void printTicketPdf(m.bookingId, ticketId)
+                              .catch((e: Error) => {
+                                setRetrieveDocMessage('');
+                                setRetrieveError(e.message);
+                              })
+                              .finally(() => setRetrieveDocAction(null));
+                          }}
+                        >
+                          {loadingPr ? 'Opening...' : 'Print Ticket'}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={Boolean(retrieveDocAction) || !hasTicket}
+                          style={{ ...rtBtn, background: '#6d28d9' }}
+                          onClick={() => {
+                            if (!hasTicket) return;
+                            setRetrieveDocAction(`rt-em:${ticketId}`);
+                            void emailTicketPdf(m.bookingId, ticketId)
+                              .then(() => {
+                                setRetrieveError('');
+                                setRetrieveDocMessage('E-ticket PDF sent to the passenger email on file.');
+                              })
+                              .catch((e: Error & { code?: string }) => {
+                                setRetrieveDocMessage('');
+                                setRetrieveError(
+                                  e.code === 'SMTP_NOT_CONFIGURED'
+                                    ? 'Email not configured on server (SMTP_HOST, SMTP_FROM).'
+                                    : e.message
+                                );
+                              })
+                              .finally(() => setRetrieveDocAction(null));
+                          }}
+                        >
+                          {loadingEm ? 'Sending...' : 'Email Ticket'}
+                        </button>
+                        <button
+                          type="button"
+                          disabled={Boolean(retrieveDocAction) || !hasTicket}
+                          style={{ ...rtBtn, background: '#7c2d12' }}
+                          onClick={() => {
+                            if (!hasTicket) return;
+                            setRetrieveDocAction(`rt-rg:${ticketId}`);
+                            void regenerateTicketPdf(m.bookingId, ticketId, m.ticketNumber || m.pnr)
+                              .then(() => {
+                                setRetrieveError('');
+                                setRetrieveDocMessage('Ticket PDF regenerated successfully.');
+                              })
+                              .catch((e: Error) => {
+                                setRetrieveDocMessage('');
+                                setRetrieveError(e.message);
+                              })
+                              .finally(() => setRetrieveDocAction(null));
+                          }}
+                        >
+                          {loadingRg ? 'Regenerating...' : 'Regenerate PDF'}
+                        </button>
+                      </div>
+                      {!hasTicket ? (
+                        <p style={{ margin: '0.55rem 0 0', fontSize: '0.8rem', color: '#92400e' }}>
+                          Ticket has not been issued yet for this passenger on the matched booking.
+                        </p>
+                      ) : null}
+                      <div
+                        style={{
+                          marginTop: '0.65rem',
+                          paddingTop: '0.65rem',
+                          borderTop: '1px solid #e2e8f0',
+                          display: 'flex',
+                          flexWrap: 'wrap',
+                          gap: '0.65rem',
+                          fontSize: '0.8rem'
+                        }}
+                      >
+                        <Link href={`/bookings?open=${encodeURIComponent(m.bookingId)}`} style={{ fontWeight: 700, color: '#1d4ed8' }}>
+                          View booking
+                        </Link>
+                        <button
+                          type="button"
+                          disabled={Boolean(retrieveDocAction)}
+                          style={{
+                            border: 'none',
+                            background: 'none',
+                            padding: 0,
+                            font: 'inherit',
+                            fontWeight: 700,
+                            color: '#0369a1',
+                            cursor: retrieveDocAction ? 'default' : 'pointer',
+                            textDecoration: 'underline'
+                          }}
+                          onClick={() => {
+                            setRetrieveDocAction(`rt-inv:${m.bookingId}`);
+                            void downloadBookingInvoicePdf(m.bookingId, m.pnr)
+                              .catch((e: Error) => {
+                                setRetrieveDocMessage('');
+                                setRetrieveError(e.message);
+                              })
+                              .finally(() => setRetrieveDocAction(null));
+                          }}
+                        >
+                          {loadingInv ? 'Preparing invoice...' : 'Invoice (PDF)'}
+                        </button>
+                        {m.receiptPaymentId ? (
+                          <button
+                            type="button"
+                            disabled={Boolean(retrieveDocAction)}
+                            style={{
+                              border: 'none',
+                              background: 'none',
+                              padding: 0,
+                              font: 'inherit',
+                              fontWeight: 700,
+                              color: '#155e75',
+                              cursor: retrieveDocAction ? 'default' : 'pointer',
+                              textDecoration: 'underline'
+                            }}
+                            onClick={() => {
+                              const paymentId = m.receiptPaymentId as string;
+                              setRetrieveDocAction(`rt-rc:${m.bookingId}:${paymentId}`);
+                              void downloadPaymentReceiptPdf(m.bookingId, paymentId, m.pnr)
+                                .catch((e: Error) => {
+                                  setRetrieveDocMessage('');
+                                  setRetrieveError(e.message);
+                                })
+                                .finally(() => setRetrieveDocAction(null));
+                            }}
+                          >
+                            {loadingRc ? 'Preparing receipt...' : 'Receipt (PDF)'}
+                          </button>
+                        ) : null}
+                        {m.capabilities?.canVoidRefund ? (
+                          <Link href="/finance" style={{ fontWeight: 700, color: '#9f1239' }}>
+                            Void / refund (Finance)
+                          </Link>
+                        ) : null}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : retrieveMatches === null && !retrieveLoading && !retrieveError ? (
+              <p style={{ marginTop: '0.75rem', color: '#64748b', fontSize: '0.88rem' }}>
+                Enter PNR and last name, then use Search Ticket.
+              </p>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+
       {ticketInfo?.bookingId && (
         <section style={cardStyle}>
           <h2 style={h2Style}>3) Ticket issuance &amp; documents</h2>
@@ -1187,6 +1768,7 @@ export default function BookingPage() {
           })}
         </section>
       )}
+      </div>
     </main>
   );
 }
@@ -1252,6 +1834,18 @@ const buttonStyle: CSSProperties = {
   fontWeight: 700,
   background: '#0d47a1',
   color: '#fff',
+  cursor: 'pointer'
+};
+
+/** Outlined secondary — pairs with primary `buttonStyle` (e.g. Cancel, tertiary links). */
+const cancelButtonStyle: CSSProperties = {
+  borderRadius: 8,
+  padding: '0.65rem 0.9rem',
+  fontWeight: 700,
+  fontSize: '0.9rem',
+  background: '#ffffff',
+  color: '#0d47a1',
+  border: '2px solid #0d47a1',
   cursor: 'pointer'
 };
 

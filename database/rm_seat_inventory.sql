@@ -1,5 +1,7 @@
--- RM seat inventory: one row per issued-ticket passenger per flight leg (links tickets to seat usage).
--- Applied after sales_commercial_platform.sql (expects tickets, booking_flights, md_fare_classes).
+-- RM seat inventory (canonical migration: database/migrations/001_sm_seat_leg_allocation.sql).
+-- Kept for apply-db-fixes.sh and legacy scripts; content aligned with migration 001.
+
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 CREATE TABLE IF NOT EXISTS sm_seat_leg_allocation (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -13,11 +15,29 @@ CREATE TABLE IF NOT EXISTS sm_seat_leg_allocation (
   CONSTRAINT sm_seat_leg_allocation_unique UNIQUE (booking_id, flight_id, passenger_id)
 );
 
+ALTER TABLE sm_seat_leg_allocation ADD COLUMN IF NOT EXISTS seat_number VARCHAR(16);
+ALTER TABLE sm_seat_leg_allocation ADD COLUMN IF NOT EXISTS seat_status VARCHAR(30) NOT NULL DEFAULT 'ALLOCATED';
+ALTER TABLE sm_seat_leg_allocation ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+
+CREATE OR REPLACE FUNCTION sm_seat_leg_allocation_touch_updated_at()
+RETURNS TRIGGER LANGUAGE plpgsql AS $f$
+BEGIN
+  NEW.updated_at := NOW();
+  RETURN NEW;
+END;
+$f$;
+
+DROP TRIGGER IF EXISTS trg_sm_seat_leg_allocation_updated ON sm_seat_leg_allocation;
+CREATE TRIGGER trg_sm_seat_leg_allocation_updated
+BEFORE UPDATE ON sm_seat_leg_allocation
+FOR EACH ROW
+EXECUTE FUNCTION sm_seat_leg_allocation_touch_updated_at();
+
 CREATE INDEX IF NOT EXISTS idx_sm_seat_leg_allocation_flight ON sm_seat_leg_allocation (flight_id);
 CREATE INDEX IF NOT EXISTS idx_sm_seat_leg_allocation_booking ON sm_seat_leg_allocation (booking_id);
 CREATE INDEX IF NOT EXISTS idx_sm_seat_leg_allocation_ticket ON sm_seat_leg_allocation (ticket_id);
+CREATE INDEX IF NOT EXISTS idx_sm_seat_leg_allocation_passenger ON sm_seat_leg_allocation (passenger_id);
 
--- Backfill from existing issued tickets (idempotent)
 INSERT INTO sm_seat_leg_allocation (booking_id, flight_id, passenger_id, ticket_id, fare_class_id, cabin_class)
 SELECT bf.booking_id,
        bf.flight_id,

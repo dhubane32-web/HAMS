@@ -7,6 +7,13 @@ BEGIN
   END IF;
 END $$;
 
+DO $$ BEGIN ALTER TYPE user_role ADD VALUE 'super_admin';
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN ALTER TYPE user_role ADD VALUE 'customer_service';
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN ALTER TYPE user_role ADD VALUE 'sales_manager';
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
 CREATE TABLE IF NOT EXISTS users (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   full_name VARCHAR(150) NOT NULL,
@@ -751,6 +758,23 @@ ALTER TABLE users
   ADD COLUMN IF NOT EXISTS password_reset_token VARCHAR(128),
   ADD COLUMN IF NOT EXISTS password_reset_expires_at TIMESTAMPTZ;
 
+-- Login lockout, 2FA material, password age (see database/security_hardening.sql)
+ALTER TABLE users
+  ADD COLUMN IF NOT EXISTS failed_login_count INT NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS locked_until TIMESTAMPTZ NULL,
+  ADD COLUMN IF NOT EXISTS totp_secret_enc TEXT NULL,
+  ADD COLUMN IF NOT EXISTS totp_pending_secret_enc TEXT NULL,
+  ADD COLUMN IF NOT EXISTS totp_enabled BOOLEAN NOT NULL DEFAULT FALSE;
+
+ALTER TABLE users
+  ADD COLUMN IF NOT EXISTS password_changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  ADD COLUMN IF NOT EXISTS last_activity_at TIMESTAMPTZ NULL;
+
+CREATE INDEX IF NOT EXISTS idx_users_locked_until ON users (locked_until) WHERE locked_until IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_users_last_activity ON users (last_activity_at DESC NULLS LAST);
+
+UPDATE users SET password_changed_at = COALESCE(password_changed_at, updated_at, created_at, NOW())
+WHERE password_changed_at IS NULL;
 
 -- === Master data tables & seed (from master_data.sql + master_data_seed.sql) ===
 -- HAMS master data (run after schema.sql). Admin-only writes via API.

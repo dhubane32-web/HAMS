@@ -24,6 +24,20 @@ export const ROLES_TICKET_ISSUE = ['admin', 'booking_agent', 'agent', 'sales_man
 /** E-ticket / invoice / receipt PDFs and email. */
 export const ROLES_TICKET_DOCS = ['admin', 'booking_agent', 'agent', 'sales_manager', 'finance'];
 
+/** PNR + passenger last name ticket retrieval (desk + finance). Super Admin matches via `admin`. */
+export const ROLES_TICKET_RETRIEVE = [
+  'super_admin',
+  'admin',
+  'ticketing_agent',
+  'reservations_agent',
+  'booking_agent',
+  'agent',
+  'customer_service',
+  'sales_manager',
+  'finance',
+  'finance_admin'
+];
+
 /** Finance module: ledger, expenses, org-wide dashboards. */
 export const ROLES_FINANCE_ORG = ['admin', 'super_admin', 'finance', 'sales_manager'];
 

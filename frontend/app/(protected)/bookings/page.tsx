@@ -1,7 +1,8 @@
 'use client';
 
 import Link from 'next/link';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import toast from 'react-hot-toast';
 import ConfirmModal from '@/components/ui/ConfirmModal';
 import { SkeletonBlock } from '@/components/ui/StateBlocks';
@@ -114,6 +115,11 @@ function paymentDisplayLabel(status: string) {
 }
 
 export default function BookingsPage() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const openBookingIdFromQuery = searchParams.get('open');
+  const openedBookingFromQueryRef = useRef<string | null>(null);
+
   const [rows, setRows] = useState<BookingListRow[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
@@ -156,7 +162,7 @@ export default function BookingsPage() {
     void fetchList();
   }, [fetchList]);
 
-  async function openDetail(bookingId: string) {
+  const openDetail = useCallback(async (bookingId: string) => {
     setDetail(null);
     setDetailLoading(true);
     setNotesDraft('');
@@ -181,7 +187,26 @@ export default function BookingsPage() {
     } finally {
       setDetailLoading(false);
     }
-  }
+  }, []);
+
+  useEffect(() => {
+    if (!openBookingIdFromQuery) {
+      openedBookingFromQueryRef.current = null;
+      return;
+    }
+    if (isLoading || rows.length === 0) return;
+    if (openedBookingFromQueryRef.current === openBookingIdFromQuery) return;
+    const row = rows.find((r) => r.id === openBookingIdFromQuery);
+    if (!row) {
+      toast.error('Booking not found in the current list.');
+      openedBookingFromQueryRef.current = openBookingIdFromQuery;
+      router.replace('/bookings', { scroll: false });
+      return;
+    }
+    openedBookingFromQueryRef.current = openBookingIdFromQuery;
+    void openDetail(openBookingIdFromQuery);
+    router.replace('/bookings', { scroll: false });
+  }, [openBookingIdFromQuery, isLoading, rows, router, openDetail]);
 
   async function saveNotes() {
     if (!detail) return;
@@ -314,6 +339,13 @@ export default function BookingsPage() {
           </button>
           <Link href="/booking" className="secondary" style={{ padding: '0.5rem 0.75rem', borderRadius: 8, border: '1px solid #cbd5e1' }}>
             New booking
+          </Link>
+          <Link
+            href="/booking#retrieve"
+            className="secondary"
+            style={{ padding: '0.5rem 0.75rem', borderRadius: 8, border: '1px solid #cbd5e1' }}
+          >
+            Retrieve ticket
           </Link>
         </div>
       </section>

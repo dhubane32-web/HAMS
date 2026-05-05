@@ -1,0 +1,2 @@
+zip failed (12): 
+zip error: Nothing to do! (try: zip -r -q /Users/abdifatahmohamudali/HAMS/backend/var/backups/run-20260505_142453/full-backup-20260505_142453.zip . -i db-20260505_142453.sql reports-20260505_142453.tar.gz system-settings-20260505_142453.json ticket-pdfs-20260505_142453.tar.gz uploads-20260505_142453.tar.gz)

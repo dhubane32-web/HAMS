@@ -2,6 +2,7 @@ import express from 'express';
 import { pool } from '../../config/db.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { userHasAnyRole } from '../../lib/roles.js';
+import { dateRangeToDepartureWindow, queryLoadFactorSnapshot } from '../../services/loadFactor.js';
 
 const router = express.Router();
 
@@ -392,6 +393,210 @@ router.get('/summary', requireAuth, async (req, res) => {
     const aircraftHoldTotal = Number(aircraftHoldCountRes.rows[0]?.c || 0);
     const holdPnrs = Number(holdPnrsRes.rows[0]?.c || 0);
 
+    /** Executive / OCC expansion pack — extra queries are isolated so core dashboard still loads. */
+    const dayWin = dateRangeToDepartureWindow(today, today);
+    let lfSnap = {
+      loadFactor: 0,
+      totalSeatsSold: 0,
+      totalSeatsAvailable: 0,
+      flightLegCount: 0
+    };
+    try {
+      lfSnap = await queryLoadFactorSnapshot(pool, dayWin.fromTs, dayWin.toExclusiveTs);
+    } catch (e) {
+      console.warn('[dashboard/summary] load factor snapshot:', e?.message || e);
+    }
+
+    const exS = await Promise.allSettled([
+      pool.query(`SELECT COUNT(*)::int AS c FROM flights WHERE DATE(arrival_time) = DATE($1::date)`, [today]),
+      pool.query(
+        `SELECT COUNT(*)::int AS c
+         FROM flights
+         WHERE DATE(departure_time) = DATE($1::date)
+           AND COALESCE(UPPER(REPLACE(TRIM(status), ' ', '_')), '') NOT LIKE '%CANCEL%'`,
+        [today]
+      ),
+      pool.query(
+        `SELECT COUNT(DISTINCT ca.flight_id)::int AS c
+         FROM crew_assignments ca
+         JOIN flights f ON f.id = ca.flight_id
+         WHERE DATE(f.departure_time) = DATE($1::date)`,
+        [today]
+      ),
+      pool.query(
+        `SELECT COUNT(*) FILTER (WHERE COALESCE(UPPER(REPLACE(TRIM(status), ' ', '_')), '') LIKE '%DELAY%')::int AS delayed,
+                COUNT(*) FILTER (WHERE COALESCE(UPPER(REPLACE(TRIM(status), ' ', '_')), '') LIKE '%CANCEL%')::int AS cancelled,
+                COUNT(*)::int AS departures
+         FROM flights
+         WHERE DATE(departure_time) = DATE($1::date)`,
+        [today]
+      ),
+      pool.query(
+        `SELECT f.departure_airport AS o, f.arrival_airport AS d, COUNT(DISTINCT b.id)::int AS bookings
+         FROM bookings b
+         JOIN booking_flights bf ON bf.booking_id = b.id
+         JOIN flights f ON f.id = bf.flight_id
+         WHERE b.created_at::date >= (DATE($1::date) - INTERVAL '13 days')
+           AND b.created_at::date <= DATE($1::date)
+           AND UPPER(COALESCE(b.booking_status, '')) <> 'CANCELLED'
+         GROUP BY f.departure_airport, f.arrival_airport
+         ORDER BY bookings DESC
+         LIMIT 6`,
+        [today]
+      ),
+      pool.query(
+        `SELECT COALESCE(SUM(CASE WHEN b.travel_agent_id IS NULL THEN p.amount ELSE 0 END), 0)::float AS direct_amt,
+                COALESCE(SUM(CASE WHEN b.travel_agent_id IS NOT NULL THEN p.amount ELSE 0 END), 0)::float AS agent_amt
+         FROM payments p
+         JOIN bookings b ON b.id = p.booking_id
+         WHERE DATE(p.processed_at) = DATE($1::date)
+           AND UPPER(COALESCE(p.payment_status, '')) NOT IN ('FAILED', 'DECLINED')`,
+        [today]
+      ),
+      pool.query(`SELECT COUNT(*)::int AS c FROM refund_requests WHERE UPPER(TRIM(status)) = 'PENDING'`),
+      pool.query(
+        `SELECT
+           COUNT(*) FILTER (WHERE UPPER(status) IN ('OPEN', 'IN_PROGRESS', 'WAITING_CUSTOMER'))::int AS open_cases,
+           COUNT(*) FILTER (WHERE case_type = 'COMPLAINT' AND UPPER(status) IN ('OPEN', 'IN_PROGRESS'))::int AS complaints,
+           COUNT(*) FILTER (WHERE case_type = 'LOST_BAGGAGE' AND UPPER(status) IN ('OPEN', 'IN_PROGRESS'))::int AS lost_bag
+         FROM cs_service_cases`
+      ),
+      pool.query(
+        `SELECT COALESCE(SUM(amount), 0)::float AS v
+         FROM finance_expenses
+         WHERE incurred_on::date >= DATE_TRUNC('month', DATE($1::date)::timestamp)
+           AND incurred_on::date <= DATE($1::date)`,
+        [today]
+      ),
+      pool.query(
+        `SELECT COUNT(*)::int AS c
+         FROM crew_licenses
+         WHERE is_active = TRUE
+           AND expiry_date IS NOT NULL
+           AND expiry_date <= (CURRENT_DATE + INTERVAL '60 days')
+           AND expiry_date >= (CURRENT_DATE - INTERVAL '14 days')`
+      ),
+      pool.query(
+        `SELECT COUNT(*)::int AS c, COALESCE(SUM(total_amount), 0)::float AS amt
+         FROM bookings
+         WHERE UPPER(TRIM(payment_status)) IN ('UNPAID', 'PARTIALLY_PAID')
+           AND UPPER(TRIM(booking_status)) <> 'CANCELLED'`
+      ),
+      pool.query(`SELECT COUNT(*)::int AS c FROM bookings WHERE DATE(created_at) = DATE($1::date)`, [today]),
+      pool.query(
+        `SELECT COALESCE(SUM(amount), 0)::float AS v
+         FROM payments
+         WHERE DATE(processed_at) = DATE($1::date)
+           AND UPPER(COALESCE(payment_status, '')) NOT IN ('FAILED', 'DECLINED')`,
+        [today]
+      )
+    ]);
+
+    const exRow = (idx) => {
+      const r = exS[idx];
+      if (r.status !== 'fulfilled' || !r.value?.rows?.[0]) {
+        if (r.status === 'rejected') {
+          console.warn(`[dashboard/summary] executive query[${idx}]:`, r.reason?.message || r.reason);
+        }
+        return {};
+      }
+      return r.value.rows[0];
+    };
+
+    const arrivalsToday = Number(exRow(0).c || 0);
+    const activeDepartures = Number(exRow(1).c || 0);
+    const crewFlightsWithRoster = Number(exRow(2).c || 0);
+    const depStats = exRow(3);
+    const delayedFlights = Number(depStats.delayed || 0);
+    const cancelledFlights = Number(depStats.cancelled || 0);
+    const departuresToday = Number(depStats.departures || flights.length || 0);
+    const topRoutesRes = exS[4].status === 'fulfilled' ? exS[4].value?.rows || [] : [];
+    const salesSplit = exRow(5);
+    const refundQueueOpen = Number(exRow(6).c || 0);
+    const csRow = exRow(7);
+    const expenseMtd = Number(exRow(8).v || 0);
+    const crewExpirySoon = Number(exRow(9).c || 0);
+    const pendingPayRow = exRow(10);
+    const pendingPaymentsCount = Number(pendingPayRow.c || 0);
+    const pendingPaymentsAmount = Number(pendingPayRow.amt || 0);
+    const bookingsTodayAllRoles = Number(exRow(11).c ?? bookingsToday);
+    const revenueTodayRaw = exRow(12).v;
+    const revenueTodayAllRoles =
+      revenueTodayRaw != null && Number.isFinite(Number(revenueTodayRaw)) ? Number(revenueTodayRaw) : payToday;
+
+    const topRoutes = topRoutesRes.map((r) => ({
+      route: `${r.o}→${r.d}`,
+      bookings: Number(r.bookings || 0)
+    }));
+
+    const otpPct =
+      departuresToday > 0 ? Math.round(((departuresToday - delayedFlights) / departuresToday) * 1000) / 10 : null;
+
+    const crewReadinessPct =
+      activeDepartures > 0 ? Math.min(100, Math.round((crewFlightsWithRoster / activeDepartures) * 1000) / 10) : null;
+
+    const profitMarginPct =
+      revenueMonth > 0
+        ? Math.round(((revenueMonth - refundsMonth - expenseMtd) / revenueMonth) * 1000) / 10
+        : null;
+
+    const dailyNetCash = payToday - refToday;
+
+    const executiveBoard = {
+      kpis: {
+        bookingsToday: bookingsTodayAllRoles,
+        revenueToday: revenueTodayAllRoles,
+        activeFlights: activeDepartures,
+        loadFactorPct:
+          lfSnap.totalSeatsAvailable > 0 ? Math.round(lfSnap.loadFactor * 1000) / 10 : null,
+        checkInCompleted: checkinsOnToday,
+        delayedFlights,
+        cancelledFlights,
+        pendingPaymentsCount,
+        pendingPaymentsAmount
+      },
+      flightOperations: {
+        departuresToday,
+        arrivalsToday,
+        aircraftInService: Math.max(0, activeDepartures),
+        aircraftOnHold: aircraftHoldTotal,
+        crewReadinessPct,
+        onTimePerformancePct: otpPct,
+        statusBreakdown: statusMap
+      },
+      salesInsight: {
+        topRoutes,
+        agentSales: Number(salesSplit.agent_amt || 0),
+        directSales: Number(salesSplit.direct_amt || 0),
+        refundRequestsOpen: refundQueueOpen,
+        outstandingBalances: holdsOutstanding
+      },
+      customerService: {
+        openCases: Number(csRow.open_cases || 0),
+        complaintsOpen: Number(csRow.complaints || 0),
+        lostBaggageOpen: Number(csRow.lost_bag || 0),
+        refundQueueOpen: refundQueueOpen
+      },
+      financeInsight: {
+        dailyNetCash,
+        revenueTrend7d: revenue7dRes.rows.map((r) => ({ date: r.d, amount: Number(r.amount) })),
+        expenseMtd,
+        profitMarginPct,
+        revenueMtd: revenueMonth,
+        refundsMtd: refundsMonth
+      },
+      operationalAlertsExtra: {
+        crewDocumentsExpiring: crewExpirySoon,
+        pendingPaymentsCount
+      },
+      reportQuickLinks: [
+        { label: 'Daily sales report', href: '/reports' },
+        { label: 'Flight operations report', href: '/operations' },
+        { label: 'Revenue & finance', href: '/finance' },
+        { label: 'Passenger & bookings', href: '/bookings' }
+      ]
+    };
+
     const kpis = [];
     if (userHasAnyRole(role, ['admin'])) {
       kpis.push(
@@ -483,10 +688,31 @@ router.get('/summary', requireAuth, async (req, res) => {
         time: i.scheduled_for
       });
     }
+    if (pendingPaymentsCount > 0 && userHasAnyRole(role, ['admin', 'finance', 'sales_manager'])) {
+      alerts.push({
+        id: 'pending-payments',
+        severity: 'warning',
+        title: 'Payment exposure',
+        detail: `${pendingPaymentsCount} booking(s) unpaid or partially paid (${pendingPaymentsAmount.toFixed(2)} USD outstanding).`,
+        href: '/finance',
+        time: null
+      });
+    }
+    if (crewExpirySoon > 0 && userHasAnyRole(role, ['admin', 'operations'])) {
+      alerts.push({
+        id: 'crew-docs-expiry',
+        severity: 'info',
+        title: 'Crew credentials window',
+        detail: `${crewExpirySoon} active crew license(s) in the 60-day expiry review window.`,
+        href: '/crew',
+        time: null
+      });
+    }
 
     const payload = {
       role,
       date: today,
+      executive: executiveBoard,
       kpis,
       quickLinks: quickLinksForRole(role),
       alerts: alerts.slice(0, 12),

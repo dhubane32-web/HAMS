@@ -3,6 +3,7 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import toast from 'react-hot-toast';
+import DocumentHeader from '@/components/documents/DocumentHeader';
 import type { UserRole } from '@/lib/roles';
 import { getPublicApiBaseUrl } from '@/lib/api-base';
 
@@ -333,8 +334,8 @@ export default function CustomerServicePage() {
 
   return (
     <main className="module-page">
+      <DocumentHeader documentTitle="Customer Service" className="mb-6" />
       <section className="module-card">
-        <h1>Customer Service</h1>
         <p style={{ margin: 0, color: '#64748b', fontSize: '0.85rem' }}>
           Service cases tied to passengers and bookings, passenger history and profiles, internal notes, lost baggage
           linked to check-in baggage records, and refund requests that create finance approval rows. Admins see all

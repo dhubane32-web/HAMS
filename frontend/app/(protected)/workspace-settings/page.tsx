@@ -19,6 +19,14 @@ export default function WorkspaceSettingsPage() {
           Use the header profile menu or system notifications to manage your account. Further personalization controls
           will appear here in a future release.
         </p>
+        <div className="module-form-grid" style={{ marginTop: '1rem', maxWidth: 360 }}>
+          <button type="button" onClick={() => window.dispatchEvent(new Event('hams:theme-toggle'))}>
+            Toggle light / dark theme
+          </button>
+          <p style={{ margin: 0, fontSize: '0.8rem', color: '#64748b' }}>
+            Affects shell chrome and the top bar logo variant. Preference is saved in this browser.
+          </p>
+        </div>
       </section>
     </main>
   );

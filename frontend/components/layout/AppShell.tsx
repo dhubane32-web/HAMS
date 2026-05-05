@@ -3,6 +3,7 @@
 import { useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
+import BrandLogo from '@/components/BrandLogo';
 import { usePathname, useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -18,6 +19,7 @@ import {
 import { navForRole, isNavActive } from '@/lib/nav-config';
 import { roleDisplayName } from '@/lib/roles';
 import { clearClientSession, readSessionUser, type SessionUser } from '@/lib/auth-session';
+import { notifyServerLogout } from '@/lib/auth-api';
 import { canAccessModule } from '@/lib/airline-rbac';
 import ModuleAccessGate from '@/components/layout/ModuleAccessGate';
 
@@ -72,7 +74,8 @@ export default function AppShell({ children }: Props) {
 
   const roleLabel = user?.role ? roleDisplayName(user.role) : hasToken ? 'Session active' : 'Guest';
 
-  function handleLogout() {
+  async function handleLogout() {
+    await notifyServerLogout();
     clearClientSession();
     setUser(null);
     setHasToken(false);
@@ -92,7 +95,7 @@ export default function AppShell({ children }: Props) {
       >
         <div className="hams-sidebar-top">
           <div className="hams-brand">
-            <Image src="/hawana-logo.svg" alt="Hawana Airways" width={38} height={38} />
+            <BrandLogo variant="dark" placement={collapsed ? 'sidebarCollapsed' : 'sidebar'} priority />
             {!collapsed && (
               <div>
                 <h1>HAWANA AIRWAYS</h1>
@@ -134,17 +137,22 @@ export default function AppShell({ children }: Props) {
           <button type="button" className="icon-btn mobile-only" onClick={() => setMobileOpen((v) => !v)} aria-label="Toggle menu">
             <Menu size={18} />
           </button>
-          <div className="hams-page-title">
-            <h2>{pageName}</h2>
-            <p>
-              {user ? (
-                <>
-                  Signed in as <strong>{user.name}</strong> · {roleLabel}
-                </>
-              ) : (
-                'Sign in to continue'
-              )}
-            </p>
+          <div className="hams-page-title hams-page-title-with-brand">
+            <div className="hidden min-w-0 shrink-0 overflow-hidden sm:block">
+              <BrandLogo variant="light" placement="navbar" />
+            </div>
+            <div className="min-w-0">
+              <h2>{pageName}</h2>
+              <p>
+                {user ? (
+                  <>
+                    Signed in as <strong>{user.name}</strong> · {roleLabel}
+                  </>
+                ) : (
+                  'Sign in to continue'
+                )}
+              </p>
+            </div>
           </div>
           <div className="hams-search">
             <Search size={16} aria-hidden />
@@ -164,7 +172,7 @@ export default function AppShell({ children }: Props) {
             <button type="button" className="icon-btn" onClick={toggleFullscreen} aria-label="Fullscreen">
               <Maximize2 size={15} />
             </button>
-            <button type="button" className="icon-btn" onClick={handleLogout} aria-label="Sign out" title="Sign out">
+            <button type="button" className="icon-btn" onClick={() => void handleLogout()} aria-label="Sign out" title="Sign out">
               <LogOut size={16} />
             </button>
             <Link href="/workspace-settings" className="hams-profile-btn">

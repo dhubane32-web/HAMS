@@ -6,20 +6,23 @@ import { syncBookingPaymentStatus } from '../../services/bookingPaymentSync.js';
 import { logFinanceTransaction } from '../../services/financeLedger.js';
 import { validateAndLockPromo, incrementPromoUsage, PromoValidationError } from '../../services/salesPromo.js';
 import {
-  loadTicketDocumentContext,
-  buildEticketPdfBuffer,
   loadBookingDocumentContext,
   buildInvoicePdfBuffer,
   buildReceiptPdfBuffer,
   sendEticketEmail,
   isSmtpConfigured
 } from '../../services/ticketDocuments.js';
+import { getOrBuildEticketPdfBuffer } from '../../services/eticketPdfCache.js';
 import {
   ROLES_BOOKING_DESK,
   ROLES_BOOKING_PAYMENTS,
   ROLES_TICKET_ISSUE,
-  ROLES_TICKET_DOCS
+  ROLES_TICKET_DOCS,
+  ROLES_TICKET_RETRIEVE,
+  ROLES_REFUND_REQUEST
 } from '../../lib/airlineRbac.js';
+import { userHasAnyRole } from '../../lib/roles.js';
+import { writeAudit } from '../../services/auditService.js';
 import {
   postTicketCommercialHooks,
   recordPromoUsageRow,
@@ -219,6 +222,354 @@ function buildFareSnapshot({
     fare_tax_total: Array.isArray(linesFromPricing) ? Math.round(taxTotal * 100) / 100 : null,
     fare_fee_total: Array.isArray(linesFromPricing) ? Math.round(feeTotal * 100) / 100 : null
   };
+}
+
+function normalizeRetrievePnr(value) {
+  return String(value ?? '')
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, '');
+}
+
+function normalizeRetrieveLastName(value) {
+  return String(value ?? '')
+    .trim()
+    .toLowerCase();
+}
+
+function deriveLastNameFromFullName(fullName) {
+  const parts = String(fullName || '')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  return parts.length ? parts[parts.length - 1].toLowerCase() : '';
+}
+
+/**
+ * Authenticated ticket/booking lookup by PNR + passenger last name.
+ * Supports exact last-name, derived full-name last word, and full-name LIKE fallback.
+ */
+async function handleTicketRetrieve(req, res) {
+  const pnrRaw = req.method === 'GET' ? req.query.pnr : req.body?.pnr;
+  const lastRaw = req.method === 'GET' ? req.query.lastName : req.body?.lastName;
+  const pnrNorm = normalizeRetrievePnr(pnrRaw);
+  const lastNorm = normalizeRetrieveLastName(lastRaw);
+  const userId = req.user?.userId ?? null;
+  const role = req.user?.role;
+  const searchTime = new Date().toISOString();
+
+  if (!pnrNorm || !lastNorm) {
+    try {
+      await writeAudit(pool, {
+        userId,
+        action: 'TICKET_RETRIEVE_FAILED',
+        entity: 'tickets',
+        entityId: null,
+        metadata: { reason: 'VALIDATION', pnr: pnrNorm || null, role, search_time: searchTime },
+        req
+      });
+    } catch {
+      /* ignore audit failure */
+    }
+    return res.status(400).json({ message: 'PNR and passenger last name are required.' });
+  }
+
+  try {
+    const debug = {
+      receivedPnr: String(pnrRaw ?? ''),
+      normalizedPnr: pnrNorm,
+      receivedLastName: String(lastRaw ?? ''),
+      normalizedLastName: lastNorm,
+      bookingFoundByPnr: false,
+      passengerFound: false,
+      passengerFullName: null,
+      derivedLastName: null,
+      ticketNumberFound: null,
+      finalMatchResult: false,
+      reason: null
+    };
+
+    // A) Find booking by the same base table used by booking list.
+    const bRes = await pool.query(
+      `SELECT b.id, b.pnr, b.booking_status, b.payment_status, b.total_amount, b.currency
+       FROM bookings b
+       WHERE REGEXP_REPLACE(UPPER(TRIM(b.pnr)), '\\s+', '', 'g') = $1
+       ORDER BY b.created_at DESC
+       LIMIT 1`,
+      [pnrNorm]
+    );
+    const booking = bRes.rows[0];
+    debug.bookingFoundByPnr = Boolean(booking);
+
+    if (!booking) {
+      await writeAudit(pool, {
+        userId,
+        action: 'TICKET_RETRIEVE_NOT_FOUND',
+        entity: 'tickets',
+        entityId: null,
+        metadata: {
+          pnr: pnrNorm,
+          lastName: lastNorm,
+          role,
+          search_time: searchTime,
+          reason: 'PNR_NOT_FOUND',
+          pnrMatchedCount: 0
+        },
+        req
+      });
+      return res.status(404).json({
+        message: 'No ticket found for this PNR and passenger last name. Check spelling and try again.',
+        matches: [],
+        count: 0,
+        debug:
+          process.env.NODE_ENV === 'production'
+            ? undefined
+            : {
+                matchedPnr: pnrNorm,
+                matchedPassengerName: null,
+                reason: 'PNR_NOT_FOUND',
+                trace: debug
+              }
+      });
+    }
+
+    // B) Load linked passengers from booking_passengers relationship.
+    const pRes = await pool.query(
+      `SELECT p.id AS passenger_id, p.first_name, p.last_name, p.email AS passenger_email
+       FROM booking_passengers bp
+       JOIN passengers p ON p.id = bp.passenger_id
+       WHERE bp.booking_id = $1
+       ORDER BY bp.id ASC`,
+      [booking.id]
+    );
+    debug.passengerFound = pRes.rowCount > 0;
+
+    // C) Match last name using required rules.
+    const matchedPassengers = pRes.rows.filter((pax) => {
+      const first = String(pax.first_name || '').trim();
+      const last = String(pax.last_name || '').trim();
+      const fullName = `${first} ${last}`.trim();
+      const fullLower = fullName.toLowerCase();
+      const derivedLast = deriveLastNameFromFullName(fullName);
+      const lastColNorm = last.toLowerCase();
+      const lastWordFromLastCol = deriveLastNameFromFullName(last);
+      const matched =
+        (lastColNorm ? lastColNorm === lastNorm : false) ||
+        (lastWordFromLastCol ? lastWordFromLastCol === lastNorm : false) ||
+        (derivedLast ? derivedLast === lastNorm : false) ||
+        fullLower.includes(lastNorm);
+      if (matched && !debug.passengerFullName) {
+        debug.passengerFullName = fullName || null;
+        debug.derivedLastName = derivedLast || null;
+      }
+      return matched;
+    });
+
+    if (matchedPassengers.length === 0) {
+      debug.reason = 'PASSENGER_NAME_NOT_MATCHED';
+      await writeAudit(pool, {
+        userId,
+        action: 'TICKET_RETRIEVE_NOT_FOUND',
+        entity: 'tickets',
+        entityId: null,
+        metadata: {
+          pnr: pnrNorm,
+          lastName: lastNorm,
+          role,
+          search_time: searchTime,
+          reason: debug.reason,
+          pnrMatchedCount: 1
+        },
+        req
+      });
+      return res.status(404).json({
+        message: 'No ticket found for this PNR and passenger last name. Check spelling and try again.',
+        matches: [],
+        count: 0,
+        debug:
+          process.env.NODE_ENV === 'production'
+            ? undefined
+            : {
+                matchedPnr: pnrNorm,
+                matchedPassengerName: null,
+                reason: debug.reason,
+                trace: debug,
+                candidatePassengerNames: pRes.rows.map((r) => `${String(r.first_name || '').trim()} ${String(r.last_name || '').trim()}`.trim())
+              }
+      });
+    }
+
+    // D) Load tickets for booking (do not require separate ticket_documents).
+    const tRes = await pool.query(
+      `SELECT id AS ticket_id, passenger_id, ticket_number, ticket_status, issued_at
+       FROM tickets
+       WHERE booking_id = $1
+       ORDER BY issued_at DESC NULLS LAST`,
+      [booking.id]
+    );
+    const byPassengerTicket = new Map(tRes.rows.map((t) => [t.passenger_id, t]));
+    const anyTicket = tRes.rows[0] || null;
+
+    debug.ticketNumberFound = anyTicket?.ticket_number || null;
+
+    const bookingIds = [booking.id];
+    const flightsByBooking = new Map();
+    for (const bid of bookingIds) {
+      const fr = await pool.query(
+        `SELECT f.flight_number, f.departure_airport, f.arrival_airport, f.departure_time, f.arrival_time, bf.leg_type
+         FROM booking_flights bf
+         JOIN flights f ON f.id = bf.flight_id
+         WHERE bf.booking_id = $1
+         ORDER BY CASE COALESCE(bf.leg_type, 'OUTBOUND') WHEN 'OUTBOUND' THEN 1 WHEN 'INBOUND' THEN 2 ELSE 3 END,
+                  f.departure_time ASC`,
+        [bid]
+      );
+      flightsByBooking.set(bid, fr.rows);
+    }
+
+    const payByBooking = new Map();
+    for (const bid of bookingIds) {
+      const pr = await pool.query(
+        `SELECT id FROM payments
+         WHERE booking_id = $1
+           AND UPPER(TRIM(COALESCE(payment_status, ''))) IN ('PAID', 'SUCCESS')
+         ORDER BY processed_at DESC NULLS LAST
+         LIMIT 1`,
+        [bid]
+      );
+      payByBooking.set(bid, pr.rows[0]?.id || null);
+    }
+
+    const seatCabinByPax = new Map();
+    for (const row of matchedPassengers) {
+      const key = `${booking.id}:${row.passenger_id}`;
+      if (seatCabinByPax.has(key)) continue;
+
+      const cabinR = await pool.query(
+        `SELECT COALESCE(bf.cabin_class, 'ECONOMY') AS cabin
+         FROM booking_flights bf
+         JOIN flights f ON f.id = bf.flight_id
+         WHERE bf.booking_id = $1
+         ORDER BY CASE COALESCE(bf.leg_type, 'OUTBOUND') WHEN 'OUTBOUND' THEN 1 WHEN 'INBOUND' THEN 2 ELSE 3 END,
+                  f.departure_time ASC`,
+        [booking.id]
+      );
+      const cabinSummary =
+        [...new Set(cabinR.rows.map((r) => String(r.cabin || '').trim()).filter(Boolean))].join(' · ') || '—';
+
+      const seatR = await pool.query(
+        `SELECT c.seat_number, f.departure_time
+         FROM checkins c
+         JOIN flights f ON f.id = c.flight_id
+         WHERE c.booking_id = $1 AND c.passenger_id = $2
+         ORDER BY f.departure_time ASC NULLS LAST`,
+        [booking.id, row.passenger_id]
+      );
+      const seatSummary =
+        seatR.rows
+          .map((s) => String(s.seat_number || '').trim())
+          .filter(Boolean)
+          .join(' · ') || '—';
+
+      seatCabinByPax.set(key, { seatSummary, cabinSummary });
+    }
+
+    const canVoidRefund = userHasAnyRole(role, ROLES_REFUND_REQUEST);
+    const matches = matchedPassengers.map((row) => {
+      const fl = flightsByBooking.get(booking.id) || [];
+      const tkt = byPassengerTicket.get(row.passenger_id) || anyTicket;
+      const routeSummary = fl.map((f) => `${f.departure_airport}→${f.arrival_airport}`).join(' · ') || '—';
+      const flightNumberSummary = fl.map((f) => f.flight_number).filter(Boolean).join(' · ') || '—';
+      const firstDep = fl[0]?.departure_time || tkt?.issued_at;
+      const fullName = `${row.first_name || ''} ${row.last_name || ''}`.trim();
+      const depDate =
+        firstDep && !Number.isNaN(new Date(firstDep).getTime())
+          ? new Date(firstDep).toISOString().slice(0, 10)
+          : null;
+      const sc = seatCabinByPax.get(`${booking.id}:${row.passenger_id}`) || {
+        seatSummary: '—',
+        cabinSummary: '—'
+      };
+      return {
+        bookingId: booking.id,
+        ticketId: tkt?.ticket_id || null,
+        pnr: booking.pnr,
+        ticketNumber: tkt?.ticket_number || null,
+        passengerFullName: fullName,
+        passengerEmail: row.passenger_email != null ? String(row.passenger_email).trim() : '',
+        routeSummary,
+        flightNumberSummary,
+        firstDepartureIso: firstDep,
+        departureDate: depDate,
+        seatSummary: sc.seatSummary,
+        cabinSummary: sc.cabinSummary,
+        bookingStatus: booking.booking_status,
+        ticketStatus: tkt?.ticket_status || 'NOT_ISSUED',
+        hasTicketPdf: Boolean(tkt?.ticket_id),
+        fareTotal: String(booking.total_amount),
+        currency: booking.currency,
+        flights: fl.map((f) => ({
+          leg_type: f.leg_type,
+          flight_number: f.flight_number,
+          route: `${f.departure_airport}→${f.arrival_airport}`,
+          departure_time: f.departure_time
+        })),
+        receiptPaymentId: payByBooking.get(booking.id) || null,
+        capabilities: {
+          canReissue: false,
+          canVoidRefund,
+          canRegeneratePdf: Boolean(tkt?.ticket_id)
+        }
+      };
+    });
+
+    debug.finalMatchResult = matches.length > 0;
+    debug.reason = matches.length > 0 ? 'MATCHED' : 'NO_FINAL_MATCH';
+
+    await writeAudit(pool, {
+      userId,
+      action: 'TICKET_RETRIEVE',
+      entity: 'tickets',
+      entityId: matches[0]?.ticketId || null,
+      metadata: {
+        pnr: pnrNorm,
+        lastName: lastNorm,
+        role,
+        search_time: searchTime,
+        matchCount: matches.length,
+        ticketIds: matches.map((m) => m.ticketId).filter(Boolean)
+      },
+      req
+    });
+
+    return res.status(200).json({
+      matches,
+      count: matches.length,
+      debug:
+        process.env.NODE_ENV === 'production'
+          ? undefined
+          : {
+              matchedPnr: pnrNorm,
+              matchedPassengerName: matches[0]?.passengerFullName || null,
+              reason: debug.reason,
+              trace: debug
+            }
+    });
+  } catch (error) {
+    try {
+      await writeAudit(pool, {
+        userId,
+        action: 'TICKET_RETRIEVE_ERROR',
+        entity: 'tickets',
+        entityId: null,
+        metadata: { pnr: pnrNorm, role, search_time: searchTime, error: String(error?.message || error) },
+        req
+      });
+    } catch {
+      /* ignore */
+    }
+    return res.status(500).json({ message: 'Ticket retrieval failed.', error: error.message });
+  }
 }
 
 router.get('/health', (_req, res) => {
@@ -1112,14 +1463,18 @@ router.get(
       return res.status(400).json({ message: 'Invalid booking or ticket id.' });
     }
     try {
-      const ctx = await loadTicketDocumentContext(pool, bookingId, ticketId);
-      if (!ctx) {
+      const forceRegenerate =
+        String(req.query.regenerate || '').toLowerCase() === 'true' || String(req.query.regenerate || '') === '1';
+      const { buffer: buf, context: ctx, cacheHit } = await getOrBuildEticketPdfBuffer(pool, bookingId, ticketId, {
+        forceRegenerate
+      });
+      if (!buf || !ctx) {
         return res.status(404).json({ message: 'Ticket not found for this booking.' });
       }
-      const buf = await buildEticketPdfBuffer(ctx);
       const filename = `e-ticket-${ctx.ticket.ticket_number}.pdf`;
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader('Content-Disposition', `inline; filename="${filename.replace(/"/g, '')}"`);
+      res.setHeader('X-Eticket-Pdf-Cache', cacheHit ? 'HIT' : 'MISS');
       return res.status(200).send(buf);
     } catch (error) {
       return res.status(500).json({ message: 'Failed to build e-ticket PDF.', error: error.message });
@@ -1200,8 +1555,8 @@ router.post(
       });
     }
     try {
-      const ctx = await loadTicketDocumentContext(pool, bookingId, ticketId);
-      if (!ctx) {
+      const { buffer: buf, context: ctx } = await getOrBuildEticketPdfBuffer(pool, bookingId, ticketId);
+      if (!buf || !ctx) {
         return res.status(404).json({ message: 'Ticket not found for this booking.' });
       }
       const toOverride = req.body?.to != null ? String(req.body.to).trim() : '';
@@ -1209,7 +1564,6 @@ router.post(
       if (!to) {
         return res.status(400).json({ message: 'Passenger has no email; provide `to` in the request body.' });
       }
-      const buf = await buildEticketPdfBuffer(ctx);
       const tkt = ctx.ticket.ticket_number;
       const pnr = ctx.ticket.pnr;
       await sendEticketEmail({
@@ -1291,6 +1645,9 @@ router.get('/pnr/:pnr', requireAuth, requireRoles(...ROLES_BOOKING_DESK), async 
     return res.status(500).json({ message: 'Failed to retrieve booking by PNR.', error: error.message });
   }
 });
+
+router.post('/retrieve', requireAuth, requireRoles(...ROLES_TICKET_RETRIEVE), handleTicketRetrieve);
+router.get('/retrieve', requireAuth, requireRoles(...ROLES_TICKET_RETRIEVE), handleTicketRetrieve);
 
 router.get(
   '/:bookingId',

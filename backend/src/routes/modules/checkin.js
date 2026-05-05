@@ -9,6 +9,7 @@ import {
   buildBoardingPassView
 } from '../../services/checkinBoardingService.js';
 import { buildBoardingPassPdfBuffer, buildBagTagPdfBuffer, loadBagTagPdfContext } from '../../services/checkinDocuments.js';
+import { buildFlightManifestPdfFromPool } from '../../services/flightManifestPdf.js';
 import { assertGateMatchesFlight, runBoardingScan } from '../../services/checkinBoardingWorkflow.js';
 import { recordOccFlightEvent } from '../../services/occFlightEvents.js';
 import { isFlightOpenForPassengerCheckin } from '../../lib/flightOccStatus.js';
@@ -531,6 +532,29 @@ router.get(
       });
     } catch (error) {
       return res.status(500).json({ message: 'Failed to load flight manifest.', error: error.message });
+    }
+  }
+);
+
+router.get(
+  '/flights/:flightId/manifest.pdf',
+  requireAuth,
+  requireRoles(...ROLES_CHECKIN_DESK),
+  async (req, res) => {
+    const { flightId } = req.params;
+    if (!isUuid(flightId)) {
+      return res.status(400).json({ message: 'Invalid flight id.' });
+    }
+    try {
+      const buf = await buildFlightManifestPdfFromPool(pool, flightId);
+      if (!buf) {
+        return res.status(404).json({ message: 'Flight not found.' });
+      }
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `inline; filename="manifest-${flightId.slice(0, 8)}.pdf"`);
+      return res.status(200).send(buf);
+    } catch (error) {
+      return res.status(500).json({ message: 'Failed to build flight manifest PDF.', error: error.message });
     }
   }
 );

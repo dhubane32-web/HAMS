@@ -87,23 +87,33 @@ export function readSessionUser(): SessionUser | null {
   return user;
 }
 
-const MAX_AGE_SEC = 60 * 60 * 8; // match backend JWT (8h)
+const DEFAULT_MAX_AGE_SEC = 60 * 60 * 8;
 
 function secureCookieSuffix(): string {
   if (typeof window === 'undefined') return '';
   return window.location.protocol === 'https:' ? '; Secure' : '';
 }
 
+function sameSitePolicy(): 'Lax' | 'Strict' {
+  if (typeof window === 'undefined') return 'Lax';
+  const https = window.location.protocol === 'https:';
+  const local = /^(localhost|127\.0\.0\.1)$/i.test(window.location.hostname);
+  return https && !local ? 'Strict' : 'Lax';
+}
+
 /** Persist JWT for middleware + API calls (localStorage is set by callers). */
-export function persistSessionCookie(token: string): void {
+export function persistSessionCookie(token: string, maxAgeSec?: number): void {
   if (typeof document === 'undefined') return;
+  const age = Math.min(60 * 60 * 24 * 7, Math.max(120, maxAgeSec ?? DEFAULT_MAX_AGE_SEC));
   const v = encodeURIComponent(token);
-  document.cookie = `${SESSION_COOKIE_NAME}=${v}; Path=/; Max-Age=${MAX_AGE_SEC}; SameSite=Lax${secureCookieSuffix()}`;
+  const ss = sameSitePolicy();
+  document.cookie = `${SESSION_COOKIE_NAME}=${v}; Path=/; Max-Age=${age}; SameSite=${ss}${secureCookieSuffix()}`;
 }
 
 export function clearSessionCookie(): void {
   if (typeof document === 'undefined') return;
-  document.cookie = `${SESSION_COOKIE_NAME}=; Path=/; Max-Age=0; SameSite=Lax${secureCookieSuffix()}`;
+  const ss = sameSitePolicy();
+  document.cookie = `${SESSION_COOKIE_NAME}=; Path=/; Max-Age=0; SameSite=${ss}${secureCookieSuffix()}`;
 }
 
 export function clearClientSession(): void {

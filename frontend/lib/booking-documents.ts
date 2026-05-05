@@ -35,6 +35,30 @@ export async function downloadTicketPdf(bookingId: string, ticketId: string, tic
   downloadBlob(blob, `e-ticket-${ticketNumber}.pdf`);
 }
 
+export async function regenerateTicketPdf(bookingId: string, ticketId: string, ticketNumber: string) {
+  const blob = await fetchPdf(`/api/booking/${bookingId}/documents/tickets/${ticketId}.pdf?regenerate=1`);
+  downloadBlob(blob, `e-ticket-${ticketNumber}-regenerated.pdf`);
+}
+
+/** Open the e-ticket PDF in a new tab (inline viewer). */
+export async function viewTicketPdf(bookingId: string, ticketId: string) {
+  const blob = await fetchPdf(`/api/booking/${bookingId}/documents/tickets/${ticketId}.pdf`);
+  const url = URL.createObjectURL(blob);
+  const w = window.open(url, '_blank', 'noopener,noreferrer');
+  if (!w) {
+    URL.revokeObjectURL(url);
+    throw new Error('Popup blocked — allow popups to view the e-ticket, or use Download PDF.');
+  }
+  window.setTimeout(() => {
+    try {
+      w.focus();
+    } catch {
+      /* ignore */
+    }
+  }, 100);
+}
+
+/** Opens the PDF in a new tab and triggers the browser print dialog (print-friendly e-ticket). */
 export async function printTicketPdf(bookingId: string, ticketId: string) {
   const blob = await fetchPdf(`/api/booking/${bookingId}/documents/tickets/${ticketId}.pdf`);
   const url = URL.createObjectURL(blob);

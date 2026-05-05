@@ -7,3 +7,4 @@ dist
 .DS_Store
 coverage
 .npm-cache
+var/eticket-pdf-cache

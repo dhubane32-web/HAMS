@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import toast from 'react-hot-toast';
 import { getPublicApiBaseUrl } from '@/lib/api-base';
+import BrandLogo from '@/components/BrandLogo';
 
 const API_BASE_URL = getPublicApiBaseUrl();
 
@@ -42,6 +43,9 @@ function ResetPasswordForm() {
 
   return (
     <main className="module-page" style={{ minHeight: '100vh', padding: '2rem', maxWidth: 420, margin: '0 auto' }}>
+      <div style={{ marginBottom: '1.25rem', display: 'flex', justifyContent: 'center' }}>
+        <BrandLogo variant="light" placement="login" priority />
+      </div>
       <h1 style={{ color: '#001f5b' }}>Set new password</h1>
       <form className="module-card module-form-grid" onSubmit={handleSubmit} style={{ marginTop: '1rem' }}>
         <input value={token} onChange={(e) => setToken(e.target.value)} placeholder="Reset token" required />

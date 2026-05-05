@@ -6,6 +6,15 @@ import { ROLES_FINANCE_ORG, ROLES_REFUND_QUEUE, ROLES_REFUND_REQUEST } from '../
 import { logFinanceTransaction } from '../../services/financeLedger.js';
 import { syncBookingPaymentStatus } from '../../services/bookingPaymentSync.js';
 import { recordOccFlightEvent } from '../../services/occFlightEvents.js';
+import { writeAudit } from '../../services/auditService.js';
+import {
+  buildFinanceDailyReportPdfBuffer,
+  buildFinanceCashReportPdfBuffer,
+  buildFinanceAgentSalesPdfBuffer,
+  buildFinanceDailyRevenuePdfBuffer,
+  buildFinanceExpenseTrendPdfBuffer,
+  buildFinanceRefundRegisterPdfBuffer
+} from '../../services/financeReportPdf.js';
 
 const router = express.Router();
 
@@ -633,6 +642,14 @@ router.post(
         userId: req.user.userId
       });
       await client.query('COMMIT');
+      await writeAudit(pool, {
+        userId: req.user.userId,
+        action: 'REFUND_REQUEST_REJECTED',
+        entity: 'refund_requests',
+        entityId: requestId,
+        metadata: { reason: reason ? String(reason).slice(0, 500) : null },
+        req
+      });
       return res.status(200).json({ message: 'Refund request rejected.' });
     } catch (error) {
       await client.query('ROLLBACK');
@@ -675,19 +692,72 @@ router.get('/reports/daily', requireAuth, requireRoles(...ROLES_FINANCE_ORG), as
 
     const totalCollected = Number(totalsResult.rows[0].total_collected);
     const totalRefunded = Number(refundsResult.rows[0].total_refunded);
+    const paymentCount = Number(totalsResult.rows[0].payment_count);
+    const refundCount = Number(refundsResult.rows[0].refund_count);
+    const netRevenue = totalCollected - totalRefunded;
+
+    if (String(req.query.format || '').toLowerCase() === 'pdf') {
+      const buf = await buildFinanceDailyReportPdfBuffer({
+        reportDate,
+        totalCollected,
+        totalRefunded,
+        netRevenue,
+        paymentCount,
+        refundCount
+      });
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `inline; filename="finance-daily-${reportDate}.pdf"`);
+      return res.status(200).send(buf);
+    }
 
     return res.status(200).json({
       date: reportDate,
       totals: {
         totalCollected,
         totalRefunded,
-        netRevenue: totalCollected - totalRefunded,
-        paymentCount: Number(totalsResult.rows[0].payment_count),
-        refundCount: Number(refundsResult.rows[0].refund_count)
+        netRevenue,
+        paymentCount,
+        refundCount
       }
     });
   } catch (error) {
     return res.status(500).json({ message: 'Failed to generate daily finance report.', error: error.message });
+  }
+});
+
+/**
+ * Issued refunds in range (finance register). JSON or ?format=pdf
+ * GET /api/finance/reports/refund-register?from=&to=
+ */
+router.get('/reports/refund-register', requireAuth, requireRoles(...ROLES_FINANCE_ORG), async (req, res) => {
+  const from = String(req.query.from || new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10));
+  const to = String(req.query.to || new Date().toISOString().slice(0, 10));
+  try {
+    const r = await pool.query(
+      `SELECT r.refund_amount, r.refunded_at, b.pnr
+       FROM refunds r
+       JOIN payments p ON p.id = r.payment_id
+       JOIN bookings b ON b.id = p.booking_id
+       WHERE DATE(r.refunded_at) >= DATE($1::date) AND DATE(r.refunded_at) <= DATE($2::date)
+       ORDER BY r.refunded_at DESC
+       LIMIT 5000`,
+      [from, to]
+    );
+
+    if (String(req.query.format || '').toLowerCase() === 'pdf') {
+      const buf = await buildFinanceRefundRegisterPdfBuffer({
+        from,
+        to,
+        rows: r.rows
+      });
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `inline; filename="finance-refunds-${from}_${to}.pdf"`);
+      return res.status(200).send(buf);
+    }
+
+    return res.status(200).json({ from, to, refunds: r.rows });
+  } catch (error) {
+    return res.status(500).json({ message: 'Failed to load refund register.', error: error.message });
   }
 });
 
@@ -718,6 +788,18 @@ router.get('/reports/cash', requireAuth, requireRoles(...ROLES_FINANCE_ORG), asy
        ORDER BY day ASC`,
       [from, to]
     );
+
+    if (String(req.query.format || '').toLowerCase() === 'pdf') {
+      const buf = await buildFinanceCashReportPdfBuffer({
+        from,
+        to,
+        paymentsByDay: rows.rows,
+        refundsByDay: refunds.rows
+      });
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `inline; filename="finance-cash-${from}_${to}.pdf"`);
+      return res.status(200).send(buf);
+    }
 
     return res.status(200).json({ from, to, paymentsByDay: rows.rows, refundsByDay: refunds.rows });
   } catch (error) {
@@ -783,6 +865,17 @@ router.get('/reports/agent-sales', requireAuth, requireRoles(...ROLES_FINANCE_OR
       vals
     );
 
+    if (String(req.query.format || '').toLowerCase() === 'pdf') {
+      const buf = await buildFinanceAgentSalesPdfBuffer({
+        from,
+        to,
+        agentSales: sales.rows
+      });
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `inline; filename="finance-agent-sales-${from}_${to}.pdf"`);
+      return res.status(200).send(buf);
+    }
+
     return res.status(200).json({ from, to, agentSales: sales.rows });
   } catch (error) {
     return res.status(500).json({ message: 'Failed to load agent sales.', error: error.message });
@@ -806,6 +899,17 @@ router.get('/reports/daily-revenue', requireAuth, requireRoles(...ROLES_FINANCE_
        ORDER BY day ASC`,
       [from, to]
     );
+    if (String(req.query.format || '').toLowerCase() === 'pdf') {
+      const buf = await buildFinanceDailyRevenuePdfBuffer({
+        from,
+        to,
+        series: r.rows
+      });
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `inline; filename="finance-daily-revenue-${from}_${to}.pdf"`);
+      return res.status(200).send(buf);
+    }
+
     return res.status(200).json({ from, to, series: r.rows });
   } catch (error) {
     return res.status(500).json({ message: 'Failed to load daily revenue.', error: error.message });
@@ -1101,6 +1205,17 @@ router.get('/reports/expense-trend', requireAuth, requireRoles('admin', 'finance
        ORDER BY e.incurred_on ASC, e.category ASC`,
       vals
     );
+    if (String(req.query.format || '').toLowerCase() === 'pdf') {
+      const buf = await buildFinanceExpenseTrendPdfBuffer({
+        from,
+        to,
+        series: r.rows
+      });
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `inline; filename="finance-expenses-${from}_${to}.pdf"`);
+      return res.status(200).send(buf);
+    }
+
     return res.json({ from, to, series: r.rows });
   } catch (error) {
     return res.status(500).json({ message: 'Failed to load expense trend.', error: error.message });
@@ -1172,6 +1287,14 @@ router.post('/bank-deposits', requireAuth, requireRoles('admin', 'finance'), asy
         req.user.userId
       ]
     );
+    await writeAudit(pool, {
+      userId: req.user.userId,
+      action: 'FINANCE_BANK_DEPOSIT_RECORDED',
+      entity: 'finance_bank_deposits',
+      entityId: ins.rows[0]?.id ?? null,
+      metadata: { amount: amt, currency: String(currency || 'USD').slice(0, 3).toUpperCase() },
+      req
+    });
     return res.status(201).json({ deposit: ins.rows[0] });
   } catch (e) {
     if (e?.code === '42P01') return res.status(503).json({ message: 'Apply finance_airline_erp.sql migration.' });

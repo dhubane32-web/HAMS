@@ -4,6 +4,7 @@ import { FormEvent, useState } from 'react';
 import Link from 'next/link';
 import toast from 'react-hot-toast';
 import { getPublicApiBaseUrl } from '@/lib/api-base';
+import BrandLogo from '@/components/BrandLogo';
 
 const API_BASE_URL = getPublicApiBaseUrl();
 
@@ -38,6 +39,9 @@ export default function ForgotPasswordPage() {
 
   return (
     <main className="module-page" style={{ minHeight: '100vh', padding: '2rem', maxWidth: 420, margin: '0 auto' }}>
+      <div style={{ marginBottom: '1.25rem', display: 'flex', justifyContent: 'center' }}>
+        <BrandLogo variant="light" placement="login" priority />
+      </div>
       <h1 style={{ color: '#001f5b' }}>Reset password</h1>
       <p style={{ color: '#64748b' }}>Enter your work email. If an active account exists, you can set a new password.</p>
       <form className="module-card module-form-grid" onSubmit={handleSubmit} style={{ marginTop: '1rem' }}>
