@@ -1,4 +1,6 @@
 node_modules
+.vercel
+frontend/.vercel
 .next
 dist
 .env
@@ -8,3 +10,6 @@ dist
 coverage
 .npm-cache
 var/eticket-pdf-cache
+
+# Local pg_dump outputs (scripts/backup-postgres.sh)
+backups/*.dump

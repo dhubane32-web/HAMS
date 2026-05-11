@@ -33,6 +33,13 @@ HAMS is a full Airline Management System for Hawana Airways.
 
 Login seed users are provided in `database/seed.sql`.
 
+## Deploying the HAMS frontend (Vercel)
+
+Production host: **`https://hams.hawanaairways.com`**. The Next.js app lives under **`frontend/`** — in Vercel set **Root Directory** to `frontend` and add the domain on **that** Git-linked project.
+
+- **`404: DEPLOYMENT_NOT_FOUND`** after DNS works → **`docs/VERCEL_HAMS_DOMAIN.md`**
+- DNS / API hostnames only → **`docs/DNS_HAMS_AND_API.md`**
+
 ## Branding source lock
 
 - Official source of truth: `frontend/public/brand/source/Hawana Logo Monotone.pdf`
