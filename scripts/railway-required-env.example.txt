@@ -1,0 +1,8 @@
+# Railway → backend service → Variables → Raw Editor → paste → Redeploy.
+# Replace placeholders; do not commit real secrets to git.
+
+NODE_ENV=production
+DATABASE_URL=${{Postgres.DATABASE_URL}}
+JWT_SECRET=your-secret-at-least-32-characters-long
+HAMS_ENCRYPTION_KEY=your-encryption-key-at-least-32-characters
+FRONTEND_URL=https://hams.hawanaairways.com,https://hams-frontend.vercel.app
