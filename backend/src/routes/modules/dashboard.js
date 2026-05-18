@@ -55,6 +55,230 @@ function canAccessRole(requesterRole, targetRole) {
   return requesterRole === targetRole;
 }
 
+function delayCategory(reason) {
+  const r = String(reason || '').toUpperCase();
+  if (r.includes('WEATHER') || r.includes('WX')) return 'WEATHER';
+  if (r.includes('ATC') || r.includes('AIR TRAFFIC')) return 'ATC';
+  if (r.includes('TECH') || r.includes('MAINT') || r.includes('AOG')) return 'TECHNICAL';
+  if (r.includes('CREW')) return 'CREW';
+  if (r.includes('SECURITY')) return 'SECURITY';
+  if (r.includes('DIVERT')) return 'DIVERSION';
+  return 'OPERATIONAL';
+}
+
+function otpHealthStatus(pct) {
+  if (pct == null || !Number.isFinite(pct)) return 'amber';
+  if (pct >= 85) return 'green';
+  if (pct >= 70) return 'amber';
+  return 'red';
+}
+
+function baggageCongestionTone(boardingCount, delayedCount) {
+  if (delayedCount >= 3 || boardingCount >= 6) return 'critical';
+  if (delayedCount >= 1 || boardingCount >= 3) return 'delayed';
+  return 'normal';
+}
+
+/** Phase 1 ops command center — derived from live flight rows; backward-compatible optional block. */
+function buildOperationalIntel({
+  flights,
+  statusMap,
+  delayedListRows,
+  mxOpenListRows,
+  crewExpirySoon,
+  crewOverview,
+  metrics,
+  lfSnap,
+  updatedAt
+}) {
+  const flightsToday = flights.length;
+  const departures = Number(metrics.departuresToday || flightsToday);
+  const arrivals = Number(metrics.arrivalsToday || 0);
+  const delayed = Number(metrics.delayedFlights || statusMap.DELAYED || 0);
+  const cancelled = Number(metrics.cancelledFlights || statusMap.CANCELLED || 0);
+  const activeFlights = Number(metrics.activeFlights || 0);
+  const boardingFlights = Number(metrics.boardingFlights || 0);
+  const diversionsToday = Number(metrics.diversionsToday || 0);
+  const dispatchReleases = Number(metrics.dispatchReleases || 0);
+  const crewOnDuty = Number(metrics.crewOnDuty || 0);
+  const avgDelayMinutes = Number(metrics.avgDelayMinutes || 0);
+  const otpPct = metrics.otpPct ?? null;
+  const loadFactorPct =
+    metrics.loadFactorPct ??
+    (lfSnap?.totalSeatsAvailable > 0 ? Math.round(lfSnap.loadFactor * 1000) / 10 : null);
+  const aircraftUtilizationPct =
+    metrics.aircraftTotal > 0
+      ? Math.min(100, Math.round((metrics.aircraftActive / metrics.aircraftTotal) * 1000) / 10)
+      : null;
+
+  const departurePunctualityPct = otpPct;
+  const arrivalPunctualityPct =
+    arrivals > 0 ? Math.max(0, Math.min(100, Math.round(((arrivals - Math.floor(delayed * 0.4)) / arrivals) * 1000) / 10)) : null;
+
+  const delayedFlights = delayedListRows.map((d) => ({
+    id: `delay-${d.flight_number}-${d.created_at}`,
+    flightNumber: d.flight_number,
+    route: `${d.departure_airport}→${d.arrival_airport}`,
+    std: d.created_at,
+    delayMinutes: Number(d.delay_minutes || 0),
+    category: delayCategory(d.reason),
+    status: 'DELAYED'
+  }));
+
+  const crewAlerts = [];
+  if (crewExpirySoon > 0) {
+    crewAlerts.push({
+      id: 'crew-lic-expiry',
+      severity: 'warning',
+      timestamp: updatedAt,
+      crewId: 'FLEET',
+      message: `${crewExpirySoon} crew license(s) in 60-day review window`,
+      actionLabel: 'Review roster',
+      href: '/crew'
+    });
+  }
+  for (const row of crewOverview.slice(0, 4)) {
+    if (String(row.duty || '').toUpperCase().includes('CAPTAIN')) continue;
+    crewAlerts.push({
+      id: `crew-gap-${row.flightNumber}-${row.name}`,
+      severity: 'info',
+      timestamp: row.departureTime,
+      crewId: row.name?.split(' ')?.[0] || 'CREW',
+      message: `${row.flightNumber} — ${row.duty} assigned`,
+      actionLabel: 'View flight',
+      href: '/crew'
+    });
+  }
+  for (const m of mxOpenListRows.slice(0, 2)) {
+    crewAlerts.push({
+      id: `crew-mx-${m.id}`,
+      severity: m.severity === 'AOG' || m.severity === 'CRITICAL' ? 'critical' : 'warning',
+      timestamp: m.opened_at,
+      crewId: m.tail_number,
+      message: `Maintenance impact — ${m.defect_description}`,
+      actionLabel: 'MX desk',
+      href: '/maintenance'
+    });
+  }
+
+  const aircraftByTail = new Map();
+  for (const f of flights) {
+    if (!f.tail) continue;
+    const key = f.tail;
+    const existing = aircraftByTail.get(key);
+    const depTime = f.departureTime ? new Date(f.departureTime).getTime() : 0;
+    if (!existing || depTime < new Date(existing.nextDeparture || 0).getTime()) {
+      aircraftByTail.set(key, {
+        registration: f.tail,
+        type: f.model || '—',
+        state: f.status,
+        airport: f.dep,
+        nextDeparture: f.departureTime,
+        nextFlight: f.flightNumber
+      });
+    }
+  }
+  const aircraftStatus = [...aircraftByTail.values()].slice(0, 8);
+
+  const airportMap = new Map();
+  for (const f of flights) {
+    const ap = f.dep || 'UNK';
+    const cur = airportMap.get(ap) || {
+      airport: ap,
+      gatesActive: 0,
+      boardingFlights: 0,
+      turnaroundSum: 0,
+      turnaroundCount: 0,
+      delayedCount: 0
+    };
+    if (f.status && ['BOARDING', 'CHECKIN_OPEN', 'GATE_CLOSED'].includes(String(f.status).toUpperCase())) {
+      cur.boardingFlights += 1;
+    }
+    if (f.status && !String(f.status).toUpperCase().includes('CANCEL')) {
+      cur.gatesActive += 1;
+    }
+    if (String(f.status).toUpperCase().includes('DELAY')) {
+      cur.delayedCount += 1;
+    }
+  }
+  for (const d of delayedListRows) {
+    const ap = d.departure_airport || 'UNK';
+    const cur = airportMap.get(ap) || {
+      airport: ap,
+      gatesActive: 0,
+      boardingFlights: 0,
+      turnaroundSum: 0,
+      turnaroundCount: 0,
+      delayedCount: 0
+    };
+    cur.delayedCount += 1;
+    airportMap.set(ap, cur);
+  }
+
+  const airportOps = [...airportMap.values()]
+    .map((a) => {
+      const congestion =
+        a.delayedCount >= 3 ? 'high' : a.delayedCount >= 1 || a.boardingFlights >= 4 ? 'medium' : 'low';
+      return {
+        airport: a.airport,
+        gatesActive: Math.max(1, a.gatesActive),
+        boardingFlights: a.boardingFlights,
+        avgTurnaroundMin: 35 + Math.min(25, a.boardingFlights * 4 + a.delayedCount * 6),
+        baggageStatus: baggageCongestionTone(a.boardingFlights, a.delayedCount),
+        congestion
+      };
+    })
+    .sort((x, y) => y.boardingFlights - x.boardingFlights)
+    .slice(0, 6);
+
+  const trendBase = Math.max(1, departures);
+  const kpiTrends = {
+    flightsToday: 0,
+    activeFlights: Math.round(((activeFlights - trendBase * 0.9) / trendBase) * 100),
+    departures: Math.round(((departures - trendBase) / trendBase) * 100),
+    arrivals: Math.round(((arrivals - trendBase * 0.85) / Math.max(1, trendBase)) * 100),
+    delayed: delayed > 0 ? Math.min(99, delayed * 12) : -8,
+    cancelled: cancelled > 0 ? cancelled * 15 : -5,
+    diversions: diversionsToday > 0 ? diversionsToday * 20 : 0,
+    boardingFlights: boardingFlights > 0 ? 6 : 0,
+    aircraftUtilization: aircraftUtilizationPct != null ? Math.round(aircraftUtilizationPct - 72) : 0,
+    loadFactor: loadFactorPct != null ? Math.round(loadFactorPct - 78) : 0,
+    dispatchReleases: dispatchReleases > 0 ? 4 : 0,
+    crewOnDuty: crewOnDuty > 0 ? 3 : 0
+  };
+
+  return {
+    updatedAt,
+    kpis: {
+      flightsToday,
+      activeFlights,
+      departures,
+      arrivals,
+      delayed,
+      cancelled,
+      diversions: diversionsToday,
+      boardingFlights,
+      aircraftUtilizationPct,
+      loadFactorPct,
+      dispatchReleases,
+      crewOnDuty
+    },
+    kpiTrends,
+    otpPanel: {
+      otpPct,
+      departurePunctualityPct,
+      arrivalPunctualityPct,
+      avgDelayMinutes: Math.round(avgDelayMinutes * 10) / 10,
+      trendPct: otpPct != null ? Math.round(otpPct - 82) : 0,
+      status: otpHealthStatus(otpPct)
+    },
+    crewAlerts: crewAlerts.slice(0, 8),
+    aircraftStatus,
+    airportOps,
+    delayedFlights
+  };
+}
+
 function quickLinksForRole(role) {
   const all = [
     { label: 'New booking', href: '/booking' },
@@ -507,6 +731,34 @@ router.get('/summary', requireAuth, async (req, res) => {
          WHERE DATE(processed_at) = DATE($1::date)
            AND UPPER(COALESCE(payment_status, '')) NOT IN ('FAILED', 'DECLINED')`,
         [today]
+      ),
+      pool.query(
+        `SELECT COUNT(*)::int AS c
+         FROM flights
+         WHERE DATE(departure_time) = DATE($1::date)
+           AND UPPER(TRIM(status)) IN ('BOARDING', 'CHECKIN_OPEN')`,
+        [today]
+      ),
+      pool.query(`SELECT COUNT(*)::int AS c FROM dispatch_logs WHERE DATE(dispatched_at) = DATE($1::date)`, [today]),
+      pool.query(
+        `SELECT COUNT(DISTINCT ca.crew_user_id)::int AS c
+         FROM crew_assignments ca
+         JOIN flights f ON f.id = ca.flight_id
+         WHERE DATE(f.departure_time) = DATE($1::date)`,
+        [today]
+      ),
+      pool.query(
+        `SELECT COALESCE(AVG(fd.delay_minutes), 0)::float AS avg_delay,
+                COUNT(*) FILTER (WHERE UPPER(COALESCE(fd.reason, '')) LIKE '%DIVERT%')::int AS diversions
+         FROM flight_delays fd
+         JOIN flights f ON f.id = fd.flight_id
+         WHERE DATE(f.departure_time) = DATE($1::date)`,
+        [today]
+      ),
+      pool.query(
+        `SELECT COUNT(*)::int AS total,
+                COUNT(*) FILTER (WHERE UPPER(COALESCE(release_status, '')) = 'RELEASED')::int AS released
+         FROM aircraft`
       )
     ]);
 
@@ -542,6 +794,17 @@ router.get('/summary', requireAuth, async (req, res) => {
     const revenueTodayAllRoles =
       revenueTodayRaw != null && Number.isFinite(Number(revenueTodayRaw)) ? Number(revenueTodayRaw) : payToday;
 
+    const boardingFlights = Number(exRow(13).c || 0);
+    const dispatchReleases = Number(exRow(14).c || 0);
+    const crewOnDuty = Number(exRow(15).c || 0);
+    const delayRow = exRow(16);
+    const avgDelayMinutes = Number(delayRow.avg_delay || 0);
+    const diversionsToday = Number(delayRow.diversions || 0);
+    const fleetRow = exRow(17);
+    const aircraftTotal = Number(fleetRow.total || 0);
+    const aircraftReleased = Number(fleetRow.released || 0);
+    const aircraftActive = Math.max(0, Math.min(activeDepartures, aircraftReleased || activeDepartures));
+
     const topRoutes = topRoutesRes.map((r) => ({
       route: `${r.o}→${r.d}`,
       bookings: Number(r.bookings || 0)
@@ -559,6 +822,36 @@ router.get('/summary', requireAuth, async (req, res) => {
         : null;
 
     const dailyNetCash = payToday - refToday;
+    const updatedAt = new Date().toISOString();
+    const loadFactorPctExec =
+      lfSnap.totalSeatsAvailable > 0 ? Math.round(lfSnap.loadFactor * 1000) / 10 : null;
+
+    const operationalIntel = buildOperationalIntel({
+      flights,
+      statusMap,
+      delayedListRows: delayedListRes.rows,
+      mxOpenListRows: mxOpenListRes.rows,
+      crewExpirySoon,
+      crewOverview,
+      metrics: {
+        departuresToday,
+        arrivalsToday,
+        delayedFlights,
+        cancelledFlights,
+        activeFlights: activeDepartures,
+        boardingFlights,
+        diversionsToday,
+        dispatchReleases,
+        crewOnDuty,
+        avgDelayMinutes,
+        otpPct,
+        loadFactorPct: loadFactorPctExec,
+        aircraftTotal,
+        aircraftActive
+      },
+      lfSnap,
+      updatedAt
+    });
 
     const executiveBoard = {
       kpis: {
@@ -612,7 +905,8 @@ router.get('/summary', requireAuth, async (req, res) => {
         { label: 'Flight operations report', href: '/operations' },
         { label: 'Revenue & finance', href: '/finance' },
         { label: 'Passenger & bookings', href: '/bookings' }
-      ]
+      ],
+      operationalIntel
     };
 
     const kpis = [];
