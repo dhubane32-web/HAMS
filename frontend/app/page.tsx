@@ -16,7 +16,7 @@ function hasLikelyStaffSession(token: string | null): boolean {
   return Boolean(token && token.length > 10);
 }
 
-/** Fallback when middleware does not run. Middleware already 302s `/` → login or dashboard. */
+/** Server redirect only — middleware 302s `/` → login or dashboard when it runs. */
 export default function HomePage() {
   const token = readTokenFromCookies();
   redirect(hasLikelyStaffSession(token) ? '/dashboard' : '/login');
