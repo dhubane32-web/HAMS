@@ -16,7 +16,7 @@ type Props = {
 };
 
 const outerClass: Record<BrandLogoPlacement, string> = {
-  login: 'w-full max-w-[110px] overflow-hidden md:max-w-[180px]',
+  login: 'w-full max-w-[140px] overflow-hidden sm:max-w-[180px] md:max-w-[200px]',
   sidebar: 'max-w-[140px] w-full min-w-0 overflow-hidden',
   sidebarCollapsed: 'max-w-[44px] w-full min-w-0 overflow-hidden',
   navbar: 'max-w-[180px] w-full min-w-0 overflow-hidden',
@@ -33,7 +33,7 @@ const imgClass: Record<BrandLogoPlacement, string> = {
   marketing: 'h-auto w-full object-contain object-left'
 };
 
-/** Official Hawana mark — responsive caps, never stretched (object-contain). */
+/** Brand mark — responsive caps, never stretched (object-contain). */
 function readThemeDark() {
   if (typeof document === 'undefined') return false;
   return document.documentElement.getAttribute('data-theme') === 'dark';
@@ -72,7 +72,7 @@ export default function BrandLogo({ variant, placement, className, priority }: P
         height={240}
         priority={priority}
         className={imgClass[placement]}
-        sizes="(max-width: 768px) 110px, 180px"
+        sizes="(max-width: 640px) 140px, 200px"
       />
     </div>
   );
