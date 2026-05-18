@@ -43,8 +43,6 @@ import { roleDisplayName } from '@/lib/roles';
 import { erpModuleTilesForRole } from '@/lib/dashboard-modules';
 import { getClientAuthToken, hydrateSessionFromCookie } from '@/lib/auth-session';
 import { apiFetchJson } from '@/lib/api-client';
-import { OperationsCommandSection } from '@/components/dashboard/ops';
-import type { OperationalIntel } from '@/components/dashboard/ops';
 import { OccPhase3Section } from '@/components/dashboard/occ-phase3';
 import type { OccPhase3 } from '@/components/dashboard/occ-phase3';
 
@@ -135,8 +133,8 @@ type ExecutiveBoard = {
     pendingPaymentsCount: number;
   };
   reportQuickLinks: { label: string; href: string }[];
-  operationalIntel?: OperationalIntel | null;
   occPhase3?: OccPhase3 | null;
+  occCommandCenter?: OccPhase3 | null;
 };
 
 type Summary = {
@@ -300,8 +298,8 @@ export default function DashboardPage() {
   const canOps = moduleRole && ['admin', 'super_admin', 'operations', 'maintenance'].includes(moduleRole as UserRole);
   const canOpsCommand =
     moduleRole && ['admin', 'super_admin', 'operations'].includes(moduleRole as UserRole);
-  const operationalIntel = ex?.operationalIntel ?? null;
-  const occPhase3 = ex?.occPhase3 ?? null;
+  const occPhase3 = ex?.occCommandCenter ?? ex?.occPhase3 ?? null;
+  const showCommercialBelowOps = Boolean(canOpsCommand && occPhase3?.networkHealth);
   const canCs = moduleRole && ['admin', 'super_admin', 'customer_service', 'sales_manager', 'agent'].includes(moduleRole as UserRole);
 
   const execCards = ex
@@ -377,14 +375,6 @@ export default function DashboardPage() {
           </div>
         </header>
 
-        {canOpsCommand && operationalIntel && (
-          <OperationsCommandSection
-            intel={operationalIntel}
-            onRefresh={() => void load()}
-            loading={refreshing}
-          />
-        )}
-
         {canOpsCommand && occPhase3 && (
           <OccPhase3Section data={occPhase3} onRefresh={() => void load()} loading={refreshing} />
         )}
@@ -405,31 +395,59 @@ export default function DashboardPage() {
           </div>
         )}
 
-        {/* Executive KPI strip */}
-        {execCards.length > 0 && (
-          <section className="mb-8 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4" aria-label="Executive KPIs">
-            {execCards.map((c) => {
-              const Icon = c.icon;
-              return (
-                <Link
-                  key={c.label}
-                  href={c.href}
-                  className="group flex flex-col rounded-2xl border border-slate-200/90 bg-white p-4 shadow-sm ring-1 ring-slate-900/5 transition hover:-translate-y-0.5 hover:border-hawana-blue/30 hover:shadow-md"
-                >
-                  <div className="mb-2 flex items-center justify-between">
-                    <span className="rounded-lg bg-slate-100 p-2 text-hawana-blue transition group-hover:bg-hawana-blue/10">
-                      <Icon className="h-4 w-4" aria-hidden />
-                    </span>
-                    <ArrowUpRight className="h-4 w-4 text-slate-300 transition group-hover:text-hawana-blue" aria-hidden />
-                  </div>
-                  <p className="text-[0.7rem] font-semibold uppercase tracking-wide text-slate-500">{c.label}</p>
-                  <p className="mt-1 text-xl font-bold tabular-nums text-slate-900">{c.value}</p>
-                  <p className="mt-0.5 text-[0.7rem] leading-snug text-slate-500">{c.sub}</p>
-                </Link>
-              );
-            })}
-          </section>
-        )}
+        {execCards.length > 0 &&
+          (showCommercialBelowOps ? (
+            <details className="mb-8 rounded-2xl border border-slate-200/80 bg-white/60 p-1 shadow-sm">
+              <summary className="cursor-pointer list-none rounded-xl px-4 py-3 text-sm font-semibold text-slate-700 marker:content-none [&::-webkit-details-marker]:hidden">
+                Commercial snapshot (bookings, revenue, payments)
+              </summary>
+              <section className="grid grid-cols-1 gap-3 p-3 pt-0 sm:grid-cols-2 xl:grid-cols-4" aria-label="Executive KPIs">
+                {execCards.map((c) => {
+                  const Icon = c.icon;
+                  return (
+                    <Link
+                      key={c.label}
+                      href={c.href}
+                      className="group flex flex-col rounded-2xl border border-slate-200/90 bg-white p-4 shadow-sm ring-1 ring-slate-900/5 transition hover:-translate-y-0.5 hover:border-hawana-blue/30 hover:shadow-md"
+                    >
+                      <div className="mb-2 flex items-center justify-between">
+                        <span className="rounded-lg bg-slate-100 p-2 text-hawana-blue transition group-hover:bg-hawana-blue/10">
+                          <Icon className="h-4 w-4" aria-hidden />
+                        </span>
+                        <ArrowUpRight className="h-4 w-4 text-slate-300 transition group-hover:text-hawana-blue" aria-hidden />
+                      </div>
+                      <p className="text-[0.7rem] font-semibold uppercase tracking-wide text-slate-500">{c.label}</p>
+                      <p className="mt-1 text-xl font-bold tabular-nums text-slate-900">{c.value}</p>
+                      <p className="mt-0.5 text-[0.7rem] leading-snug text-slate-500">{c.sub}</p>
+                    </Link>
+                  );
+                })}
+              </section>
+            </details>
+          ) : (
+            <section className="mb-8 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4" aria-label="Executive KPIs">
+              {execCards.map((c) => {
+                const Icon = c.icon;
+                return (
+                  <Link
+                    key={c.label}
+                    href={c.href}
+                    className="group flex flex-col rounded-2xl border border-slate-200/90 bg-white p-4 shadow-sm ring-1 ring-slate-900/5 transition hover:-translate-y-0.5 hover:border-hawana-blue/30 hover:shadow-md"
+                  >
+                    <div className="mb-2 flex items-center justify-between">
+                      <span className="rounded-lg bg-slate-100 p-2 text-hawana-blue transition group-hover:bg-hawana-blue/10">
+                        <Icon className="h-4 w-4" aria-hidden />
+                      </span>
+                      <ArrowUpRight className="h-4 w-4 text-slate-300 transition group-hover:text-hawana-blue" aria-hidden />
+                    </div>
+                    <p className="text-[0.7rem] font-semibold uppercase tracking-wide text-slate-500">{c.label}</p>
+                    <p className="mt-1 text-xl font-bold tabular-nums text-slate-900">{c.value}</p>
+                    <p className="mt-0.5 text-[0.7rem] leading-snug text-slate-500">{c.sub}</p>
+                  </Link>
+                );
+              })}
+            </section>
+          ))}
 
         <div className="grid gap-6 xl:grid-cols-12">
           {/* Flight operations */}

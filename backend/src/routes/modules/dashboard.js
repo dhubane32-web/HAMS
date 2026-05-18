@@ -564,37 +564,180 @@ function buildOccPhase3({
     label: String(r.date || '').slice(5),
     amount: Number(r.amount || 0)
   }));
-  const lfBase = metrics.loadFactorPct ?? 78;
-  const utilBase = operationalIntel?.kpis?.aircraftUtilizationPct ?? 72;
-  const loadFactorTrend = (otpTrend.length ? otpTrend : revenueTrend).map((row, i) => ({
-    date: row.date,
-    label: row.label,
-    loadFactorPct: Math.max(55, Math.min(98, Math.round(lfBase + (i - 3) * 1.2)))
+  const cancellationTrend = (otpTrend7d || []).map((r) => ({
+    date: r.d,
+    label: String(r.d || '').slice(5),
+    cancellations: Number(r.cancelled || 0)
   }));
-  const utilizationTrend = loadFactorTrend.map((row, i) => ({
-    date: row.date,
-    label: row.label,
-    utilizationPct: Math.max(50, Math.min(95, Math.round(utilBase + (i - 3) * 0.8)))
+  const delayMinutesTrend = (otpTrend7d || []).map((r) => ({
+    date: r.d,
+    label: String(r.d || '').slice(5),
+    avgDelayMinutes: Math.round(Number(r.avg_delay || 0) * 10) / 10
   }));
-  const cancellationTrend = (otpTrend.length ? otpTrend : revenueTrend).map((row, i) => ({
-    date: row.date,
-    label: row.label,
-    cancellations: Math.max(0, Math.round((metrics.cancelledFlights || 0) * (0.4 + (i % 3) * 0.1)))
+  const disruptionByCategory = {};
+  for (const d of delayedListRows) {
+    const cat = delayCategory(d.reason);
+    disruptionByCategory[cat] = (disruptionByCategory[cat] || 0) + 1;
+  }
+  const disruptionCategories = Object.entries(disruptionByCategory).map(([category, count]) => ({
+    category,
+    count
   }));
 
+  const departuresToday = Number(metrics.departuresToday || operationalIntel?.kpis?.departures || 0);
+  const delayedCount = Number(metrics.delayedFlights || operationalIntel?.kpis?.delayed || 0);
+  const cancelledCount = Number(metrics.cancelledFlights || operationalIntel?.kpis?.cancelled || 0);
+  const otpPct = operationalIntel?.otpPanel?.otpPct ?? null;
+  const fleetAvailable = Math.max(0, Number(metrics.aircraftReleased || 0));
+  const groundedCount = Math.max(0, Number(metrics.aircraftTotal || 0) - fleetAvailable);
+  const targetOtp = 85;
+
+  const networkHealth = {
+    otpPct,
+    targetOtp,
+    delayedCount,
+    cancelledCount,
+    activeFlights: Number(metrics.activeFlights || operationalIntel?.kpis?.activeFlights || 0),
+    departuresToday,
+    fleetAvailable,
+    groundedCount,
+    avgDelayMinutes: operationalIntel?.otpPanel?.avgDelayMinutes ?? 0,
+    loadFactorPct: metrics.loadFactorPct ?? operationalIntel?.kpis?.loadFactorPct ?? null,
+    utilizationPct: operationalIntel?.kpis?.aircraftUtilizationPct ?? null,
+    dispatchReleased: Number(metrics.dispatchReleases || 0),
+    dispatchPending: Math.max(0, departuresToday - Number(metrics.dispatchReleases || 0)),
+    boardingFlights: Number(operationalIntel?.kpis?.boardingFlights || 0),
+    otpStatus: operationalIntel?.otpPanel?.status || 'amber',
+    impactSummary:
+      delayedCount > 0 && otpPct != null
+        ? `${delayedCount} delay(s) and ${cancelledCount} cancellation(s) are pressuring network OTP (${otpPct}% vs ${targetOtp}% target).`
+        : cancelledCount > 0
+          ? `${cancelledCount} cancellation(s) today — recovery actions required on affected legs.`
+          : otpPct != null
+            ? `Network OTP ${otpPct}% across ${departuresToday} departures — within operational target.`
+            : 'Awaiting departure data for OTP calculation.'
+  };
+
+  const flightMovement = [...flightRows]
+    .sort((a, b) => new Date(a.departure_time).getTime() - new Date(b.departure_time).getTime())
+    .map((r) => {
+      const st = String(r.status || '').toUpperCase();
+      const isDelayed = st.includes('DELAY');
+      const isCancel = st.includes('CANCEL');
+      return {
+        id: String(r.id),
+        flightNumber: r.flight_number,
+        route: `${r.departure_airport}→${r.arrival_airport}`,
+        departureTime: r.departure_time,
+        arrivalTime: r.arrival_time,
+        status: r.status,
+        gate: r.gate || r.boarding_gate || '—',
+        tail: r.tail_number || null,
+        priority: isCancel ? 'critical' : isDelayed ? 'warning' : 'normal'
+      };
+    });
+
+  const dispatchQueue = flightMovement
+    .filter((f) => {
+      const st = String(f.status || '').toUpperCase();
+      return (
+        st.includes('SCHED') ||
+        st.includes('DELAY') ||
+        st.includes('CHECKIN') ||
+        st.includes('HOLD')
+      );
+    })
+    .slice(0, 12)
+    .map((f) => ({
+      id: f.id,
+      flightNumber: f.flightNumber,
+      route: f.route,
+      status: f.status,
+      gate: f.gate,
+      priority: f.priority,
+      actionLabel: String(f.status || '').toUpperCase().includes('DELAY') ? 'Manage delay' : 'Dispatch release',
+      href: '/operations'
+    }));
+
+  const criticalAlerts = [
+    ...delayedListRows.slice(0, 4).map((d) => ({
+      id: `crit-delay-${d.flight_number}`,
+      severity: Number(d.delay_minutes || 0) >= 60 ? 'critical' : 'warning',
+      domain: 'delay',
+      timestamp: d.created_at,
+      message: `${d.flight_number} delayed ${d.delay_minutes} min — ${delayCategory(d.reason)}`,
+      actionLabel: 'Delay desk',
+      href: '/operations'
+    })),
+    ...mxOpenListRows
+      .filter((m) => ['AOG', 'CRITICAL'].includes(String(m.severity || '').toUpperCase()))
+      .slice(0, 3)
+      .map((m) => ({
+        id: `crit-mx-${m.id}`,
+        severity: 'critical',
+        domain: 'maintenance',
+        timestamp: m.opened_at,
+        message: `${m.tail_number} — ${m.defect_description}`,
+        actionLabel: 'MX control',
+        href: '/maintenance'
+      })),
+    ...(cancelledCount > 0
+      ? [
+          {
+            id: 'crit-cancel-today',
+            severity: 'critical',
+            domain: 'cancellation',
+            timestamp: updatedAt,
+            message: `${cancelledCount} flight(s) cancelled today — network recovery required`,
+            actionLabel: 'Irregular ops',
+            href: '/operations'
+          }
+        ]
+      : []),
+    ...(crewExpirySoon > 0
+      ? [
+          {
+            id: 'crit-crew-docs',
+            severity: 'warning',
+            domain: 'crew',
+            timestamp: updatedAt,
+            message: `${crewExpirySoon} crew credential(s) in 60-day review window`,
+            actionLabel: 'Crew roster',
+            href: '/crew'
+          }
+        ]
+      : [])
+  ].slice(0, 10);
+
   return {
+    version: 1,
     updatedAt,
+    networkHealth,
+    criticalAlerts,
+    dispatchQueue,
+    flightMovement,
     liveFlights,
-    alerts: alerts.slice(0, 12),
+    alerts: alerts.slice(0, 16),
+    operationsFeed: alerts.slice(0, 16),
     stations,
     crew,
     maintenance,
+    aircraftBoard: {
+      fleetHealthPct: maintenance.fleetHealthPct,
+      groundedCount: maintenance.groundedCount,
+      utilizationPct: maintenance.utilizationPct,
+      aircraft: operationalIntel?.aircraftStatus || [],
+      melAlerts: maintenance.melAlerts,
+      cards: maintenance.cards
+    },
+    crewBoard: crew,
     analytics: {
       otpTrend,
       cancellationTrend,
-      loadFactorTrend,
-      utilizationTrend,
-      revenueTrend
+      delayMinutesTrend,
+      disruptionCategories,
+      todayLoadFactorPct: metrics.loadFactorPct ?? null,
+      todayUtilizationPct: operationalIntel?.kpis?.aircraftUtilizationPct ?? null
     }
   };
 }
@@ -1081,13 +1224,20 @@ router.get('/summary', requireAuth, async (req, res) => {
          FROM aircraft`
       ),
       pool.query(
-        `SELECT DATE(departure_time)::text AS d,
+        `SELECT DATE(f.departure_time)::text AS d,
                 COUNT(*)::int AS departures,
-                COUNT(*) FILTER (WHERE COALESCE(UPPER(REPLACE(TRIM(status), ' ', '_')), '') LIKE '%DELAY%')::int AS delayed
-         FROM flights
-         WHERE departure_time::date >= (DATE($1::date) - INTERVAL '6 days')
-           AND departure_time::date <= DATE($1::date)
-         GROUP BY DATE(departure_time)
+                COUNT(*) FILTER (
+                  WHERE COALESCE(UPPER(REPLACE(TRIM(f.status), ' ', '_')), '') LIKE '%DELAY%'
+                )::int AS delayed,
+                COUNT(*) FILTER (
+                  WHERE COALESCE(UPPER(REPLACE(TRIM(f.status), ' ', '_')), '') LIKE '%CANCEL%'
+                )::int AS cancelled,
+                COALESCE(AVG(fd.delay_minutes), 0)::float AS avg_delay
+         FROM flights f
+         LEFT JOIN flight_delays fd ON fd.flight_id = f.id
+         WHERE f.departure_time::date >= (DATE($1::date) - INTERVAL '6 days')
+           AND f.departure_time::date <= DATE($1::date)
+         GROUP BY DATE(f.departure_time)
          ORDER BY d ASC`,
         [today]
       )
@@ -1268,7 +1418,8 @@ router.get('/summary', requireAuth, async (req, res) => {
         { label: 'Passenger & bookings', href: '/bookings' }
       ],
       operationalIntel,
-      occPhase3
+      occPhase3,
+      occCommandCenter: occPhase3
     };
 
     const kpis = [];
