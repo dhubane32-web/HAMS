@@ -3,7 +3,9 @@ import jwt from 'jsonwebtoken';
 const COOKIE_NAME = 'hams_token';
 
 export function isHttpOnlySessionEnabled() {
-  return String(process.env.HAMS_HTTPONLY_SESSION || '').toLowerCase() === 'true';
+  const isProd = process.env.NODE_ENV === 'production';
+  const raw = String(process.env.HAMS_HTTPONLY_SESSION ?? (isProd ? 'true' : 'false')).toLowerCase();
+  return raw === 'true' || raw === '1' || raw === 'on';
 }
 
 export function sessionCookieMaxAgeMs(token) {
@@ -29,7 +31,7 @@ export function attachSessionCookie(res, token) {
   res.cookie(COOKIE_NAME, token, {
     httpOnly,
     secure: isProd,
-    sameSite: 'strict',
+    sameSite: 'lax',
     maxAge,
     path: '/'
   });
@@ -40,13 +42,13 @@ export function clearSessionCookie(res) {
   res.clearCookie(COOKIE_NAME, {
     httpOnly: true,
     secure: isProd,
-    sameSite: 'strict',
+    sameSite: 'lax',
     path: '/'
   });
   res.clearCookie(COOKIE_NAME, {
     httpOnly: false,
     secure: isProd,
-    sameSite: 'strict',
+    sameSite: 'lax',
     path: '/'
   });
 }

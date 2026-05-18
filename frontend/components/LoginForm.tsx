@@ -7,7 +7,7 @@ import { AlertCircle, ArrowRight, Eye, EyeOff, Loader2, Lock, ShieldCheck, User 
 import toast from 'react-hot-toast';
 import { getPublicApiBaseUrl } from '@/lib/api-base';
 import { authFetch } from '@/lib/auth-api';
-import { persistSessionCookie } from '@/lib/auth-session';
+import { setClientSession } from '@/lib/auth-session';
 import type { UserRole } from '@/lib/roles';
 import { roleDisplayName } from '@/lib/roles';
 
@@ -121,14 +121,12 @@ export default function LoginForm() {
   }
 
   function finishLoginSuccess(result: LoginSuccess, trimmedEmail: string) {
-    localStorage.setItem('hams_token', result.token);
-    localStorage.setItem('hams_user', JSON.stringify(result.user));
+    setClientSession(result.token, result.user, result.expiresInSec);
     if (rememberEmail) {
       localStorage.setItem(SAVED_LOGIN_KEY, JSON.stringify({ email: trimmedEmail, rememberEmail: true }));
     } else {
       localStorage.removeItem(SAVED_LOGIN_KEY);
     }
-    persistSessionCookie(result.token, result.expiresInSec);
 
     const nextPath =
       typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('next') : null;
@@ -138,7 +136,8 @@ export default function LoginForm() {
         : '/dashboard';
 
     toast.success(`Welcome ${result.user.name} (${roleDisplayName(result.user.role)})`);
-    router.push(safeNext);
+    setIsLoading(false);
+    router.replace(safeNext);
   }
 
   async function submitPasswordExpiry(trimmedEmail: string) {

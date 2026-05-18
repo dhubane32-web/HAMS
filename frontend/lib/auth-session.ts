@@ -94,20 +94,52 @@ function secureCookieSuffix(): string {
   return window.location.protocol === 'https:' ? '; Secure' : '';
 }
 
-function sameSitePolicy(): 'Lax' | 'Strict' {
-  if (typeof window === 'undefined') return 'Lax';
-  const https = window.location.protocol === 'https:';
-  const local = /^(localhost|127\.0\.0\.1)$/i.test(window.location.hostname);
-  return https && !local ? 'Strict' : 'Lax';
+/** Lax allows post-login navigation; Secure when on HTTPS (required for SameSite=None). */
+function sameSitePolicy(): 'Lax' | 'None' {
+  return 'Lax';
 }
 
 /** Persist JWT for middleware + API calls (localStorage is set by callers). */
 export function persistSessionCookie(token: string, maxAgeSec?: number): void {
   if (typeof document === 'undefined') return;
   const age = Math.min(60 * 60 * 24 * 7, Math.max(120, maxAgeSec ?? DEFAULT_MAX_AGE_SEC));
-  const v = encodeURIComponent(token);
   const ss = sameSitePolicy();
-  document.cookie = `${SESSION_COOKIE_NAME}=${v}; Path=/; Max-Age=${age}; SameSite=${ss}${secureCookieSuffix()}`;
+  document.cookie = `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; Max-Age=${age}; SameSite=${ss}${secureCookieSuffix()}`;
+}
+
+/** Write token + optional profile; sync cookie so Edge middleware can authorize. */
+export function setClientSession(
+  token: string,
+  user?: SessionUser & { id?: string },
+  maxAgeSec?: number
+): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem('hams_token', token);
+    if (user) {
+      localStorage.setItem(
+        'hams_user',
+        JSON.stringify({ name: user.name, email: user.email, role: user.role })
+      );
+    }
+  } catch {
+    // ignore
+  }
+  persistSessionCookie(token, maxAgeSec);
+}
+
+export function hasClientSession(): boolean {
+  if (typeof window === 'undefined') return false;
+  hydrateSessionFromCookie();
+  syncSessionCookieFromStorage();
+  const token = getClientAuthToken() ?? readSessionTokenFromCookie();
+  return Boolean(token && token.length > 10);
+}
+
+/** True when `document.cookie` has a token Edge middleware can read (avoids login↔dashboard loops). */
+export function middlewareCanSeeSession(): boolean {
+  const t = readSessionTokenFromCookie();
+  return Boolean(t && t.length > 10);
 }
 
 export function clearSessionCookie(): void {

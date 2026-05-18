@@ -41,7 +41,7 @@ import {
 import type { UserRole } from '@/lib/roles';
 import { roleDisplayName } from '@/lib/roles';
 import { erpModuleTilesForRole } from '@/lib/dashboard-modules';
-import { clearClientSession, hydrateSessionFromCookie } from '@/lib/auth-session';
+import { getClientAuthToken, hydrateSessionFromCookie } from '@/lib/auth-session';
 import { apiFetchJson } from '@/lib/api-client';
 
 const MIX_COLORS = ['#0047AB', '#0EA5E9', '#16A34A', '#F59E0B', '#8B5CF6', '#DB2777'];
@@ -230,7 +230,7 @@ export default function DashboardPage() {
 
   const load = useCallback(async () => {
     hydrateSessionFromCookie();
-    const token = localStorage.getItem('hams_token');
+    const token = getClientAuthToken();
     const rawUser = localStorage.getItem('hams_user');
     if (!token) {
       router.replace('/login');

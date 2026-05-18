@@ -3,10 +3,13 @@
 import { useEffect, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import {
+  getClientAuthToken,
   hydrateSessionFromCookie,
   persistSessionCookie,
   syncSessionCookieFromStorage
 } from '@/lib/auth-session';
+
+const SESSION_CHECK_TIMEOUT_MS = 5000;
 
 /**
  * Ensures workspace routes are not used without a session token (client guard; middleware handles first hop).
@@ -18,20 +21,47 @@ export default function ProtectedAuthGate({ children }: { children: React.ReactN
   const [allowed, setAllowed] = useState(false);
 
   useEffect(() => {
-    hydrateSessionFromCookie();
-    syncSessionCookieFromStorage();
-    const token = typeof window !== 'undefined' ? localStorage.getItem('hams_token') : null;
-    if (!token) {
+    let cancelled = false;
+
+    const grant = () => {
+      if (cancelled) return true;
+      hydrateSessionFromCookie();
+      syncSessionCookieFromStorage();
+      const token = getClientAuthToken();
+      if (!token || token.length <= 10) return false;
+      persistSessionCookie(token);
+      setAllowed(true);
+      setReady(true);
+      return true;
+    };
+
+    if (grant()) {
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const deadline = window.setTimeout(() => {
+      if (cancelled) return;
+      if (grant()) return;
       const path = pathname || '/dashboard';
-      const next = encodeURIComponent(path);
-      router.replace(`/login?next=${next}`);
+      router.replace(`/login?next=${encodeURIComponent(path)}`);
       setAllowed(false);
       setReady(true);
-      return;
-    }
-    persistSessionCookie(token);
-    setAllowed(true);
-    setReady(true);
+    }, SESSION_CHECK_TIMEOUT_MS);
+
+    const retry = window.setInterval(() => {
+      if (grant()) {
+        window.clearTimeout(deadline);
+        window.clearInterval(retry);
+      }
+    }, 150);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(deadline);
+      window.clearInterval(retry);
+    };
   }, [pathname, router]);
 
   if (!ready) {

@@ -4,6 +4,7 @@ import { useEffect } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import {
   hydrateSessionFromCookie,
+  middlewareCanSeeSession,
   persistSessionCookie,
   syncSessionCookieFromStorage
 } from '@/lib/auth-session';
@@ -17,10 +18,15 @@ export default function AuthCookieSync() {
   const router = useRouter();
 
   useEffect(() => {
+    if (pathname !== '/login') return;
     hydrateSessionFromCookie();
     syncSessionCookieFromStorage();
     const token = typeof window !== 'undefined' ? localStorage.getItem('hams_token') : null;
-    if (!token || pathname !== '/login') return;
+    if (!token || token.length <= 10) return;
+    if (!middlewareCanSeeSession()) {
+      persistSessionCookie(token);
+    }
+    if (!middlewareCanSeeSession()) return;
     const nextRaw = new URLSearchParams(window.location.search).get('next');
     const dest =
       nextRaw && nextRaw.startsWith('/') && !nextRaw.startsWith('//') && !nextRaw.startsWith('/login')
