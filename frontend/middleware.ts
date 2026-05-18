@@ -24,8 +24,11 @@ const SESSION_COOKIE_NAME = 'hams_token';
 const PUBLIC_PREFIXES = ['/login', '/forgot-password', '/reset-password'];
 
 function isPublicPath(pathname: string): boolean {
-  if (pathname === '/' || pathname === '') return true;
   return PUBLIC_PREFIXES.some((p) => pathname === p || pathname.startsWith(`${p}/`));
+}
+
+function isRootPath(pathname: string): boolean {
+  return pathname === '/' || pathname === '';
 }
 
 function readSessionToken(request: NextRequest): string | null {
@@ -91,6 +94,13 @@ export function middleware(request: NextRequest) {
   const token = readSessionToken(request);
   const hasSession = Boolean(token && token.length > 10);
 
+  if (isRootPath(pathname)) {
+    const url = request.nextUrl.clone();
+    url.pathname = hasSession ? '/dashboard' : '/login';
+    url.search = '';
+    return applyNoStoreHeaders(NextResponse.redirect(url));
+  }
+
   if (isPublicPath(pathname)) {
     if (pathname === '/login' && hasSession) {
       const dest = safeInternalPath(request.nextUrl.searchParams.get('next')) || '/dashboard';
@@ -114,6 +124,8 @@ export function middleware(request: NextRequest) {
 
 export const config = {
   matcher: [
+    // Root must be listed explicitly — the regex below does not match pathname `/`.
+    '/',
     /*
      * Do not run middleware for:
      * - `/_next`, `/_vercel`, static assets under `/brand/`, robots, sitemap

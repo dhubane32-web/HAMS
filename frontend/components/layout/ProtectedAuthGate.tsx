@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import {
+  authDebugLog,
   getClientAuthToken,
   hydrateSessionFromCookie,
   persistSessionCookie,
@@ -19,6 +20,7 @@ export default function ProtectedAuthGate({ children }: { children: React.ReactN
   const pathname = usePathname();
   const [ready, setReady] = useState(false);
   const [allowed, setAllowed] = useState(false);
+  const [timedOut, setTimedOut] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -44,6 +46,8 @@ export default function ProtectedAuthGate({ children }: { children: React.ReactN
     const deadline = window.setTimeout(() => {
       if (cancelled) return;
       if (grant()) return;
+      authDebugLog('ProtectedAuthGate.timeout', { pathname });
+      setTimedOut(true);
       const path = pathname || '/dashboard';
       router.replace(`/login?next=${encodeURIComponent(path)}`);
       setAllowed(false);
@@ -95,7 +99,16 @@ export default function ProtectedAuthGate({ children }: { children: React.ReactN
           textAlign: 'center'
         }}
       >
-        <p style={{ margin: 0 }}>Redirecting to sign in…</p>
+        {timedOut ? (
+          <>
+            <p style={{ margin: '0 0 0.5rem', color: '#b45309', fontWeight: 600 }}>Session check timed out</p>
+            <p style={{ margin: 0, maxWidth: '22rem' }}>
+              No valid sign-in was found after {SESSION_CHECK_TIMEOUT_MS / 1000} seconds. Redirecting to sign in…
+            </p>
+          </>
+        ) : (
+          <p style={{ margin: 0 }}>Redirecting to sign in…</p>
+        )}
       </div>
     );
   }

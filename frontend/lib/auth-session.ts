@@ -4,6 +4,24 @@ import { roleLabels } from '@/lib/roles';
 /** Cookie name mirrors localStorage key so middleware can see the same JWT. */
 export const SESSION_COOKIE_NAME = 'hams_token';
 
+const AUTH_DEBUG =
+  typeof process !== 'undefined' &&
+  process.env.NEXT_PUBLIC_HAMS_AUTH_DEBUG === 'true';
+
+/** Safe client-side auth diagnostics (enable with NEXT_PUBLIC_HAMS_AUTH_DEBUG=true only). */
+export function authDebugLog(event: string, detail?: Record<string, unknown>): void {
+  if (!AUTH_DEBUG || typeof window === 'undefined') return;
+  const payload = {
+    event,
+    hasStorageToken: Boolean(localStorage.getItem('hams_token')),
+    hasCookieToken: Boolean(readSessionTokenFromCookie()),
+    path: window.location.pathname,
+    ...detail
+  };
+  // eslint-disable-next-line no-console
+  console.info('[hams-auth]', payload);
+}
+
 /** Profile used by the shell and nav; aligned with login `user` payload + JWT claims. */
 export type SessionUser = { name: string; email: string; role: UserRole };
 
@@ -126,6 +144,7 @@ export function setClientSession(
     // ignore
   }
   persistSessionCookie(token, maxAgeSec);
+  authDebugLog('setClientSession', { hasUser: Boolean(user) });
 }
 
 export function hasClientSession(): boolean {
@@ -157,6 +176,7 @@ export function clearClientSession(): void {
   } catch {
     // ignore
   }
+  authDebugLog('clearClientSession');
 }
 
 /** If user has a token in localStorage but no cookie (legacy), sync for middleware. */

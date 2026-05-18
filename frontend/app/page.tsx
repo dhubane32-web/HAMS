@@ -1,16 +1,23 @@
-import Link from 'next/link';
+import { cookies } from 'next/headers';
+import { redirect } from 'next/navigation';
+import { SESSION_COOKIE_NAME } from '@/lib/auth-session';
 
-/** Root path: `next.config.mjs` also redirects `/` → `/login`; this is a fallback if that redirect is skipped. */
+function readTokenFromCookies(): string | null {
+  const raw = cookies().get(SESSION_COOKIE_NAME)?.value;
+  if (!raw) return null;
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return raw;
+  }
+}
+
+function hasLikelyStaffSession(token: string | null): boolean {
+  return Boolean(token && token.length > 10);
+}
+
+/** Fallback when middleware does not run. Middleware already 302s `/` → login or dashboard. */
 export default function HomePage() {
-  return (
-    <main style={{ minHeight: '100vh', display: 'grid', placeContent: 'center', padding: '2rem', background: '#f1f5f9' }}>
-      <div style={{ textAlign: 'center' }}>
-        <h1 style={{ margin: '0 0 1rem', fontSize: '1.35rem', color: '#001f5b' }}>Hawana HAMS</h1>
-        <p style={{ margin: '0 0 1rem', color: '#64748b' }}>Sign in to continue.</p>
-        <Link href="/login" style={{ fontWeight: 700, color: '#1d4ed8' }}>
-          Go to sign in →
-        </Link>
-      </div>
-    </main>
-  );
+  const token = readTokenFromCookies();
+  redirect(hasLikelyStaffSession(token) ? '/dashboard' : '/login');
 }

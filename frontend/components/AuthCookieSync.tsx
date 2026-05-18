@@ -3,6 +3,7 @@
 import { useEffect } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import {
+  authDebugLog,
   hydrateSessionFromCookie,
   middlewareCanSeeSession,
   persistSessionCookie,
@@ -32,6 +33,7 @@ export default function AuthCookieSync() {
       nextRaw && nextRaw.startsWith('/') && !nextRaw.startsWith('//') && !nextRaw.startsWith('/login')
         ? nextRaw
         : '/dashboard';
+    authDebugLog('AuthCookieSync.replace', { dest });
     router.replace(dest);
   }, [pathname, router]);
 
