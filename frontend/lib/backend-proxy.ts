@@ -1,12 +1,14 @@
 import type { NextRequest } from 'next/server';
+import { isDeadApiHost, sanitizeBackendUrl } from '@/lib/dead-api-host';
 
-/** Server-only Railway/VPS API base (Vercel env). */
+/** Server-only Railway/VPS API base (Vercel env). Ignores dead api.hawanaairways.com. */
 export function getBackendInternalUrl(): string {
-  const raw = process.env.HAMS_BACKEND_INTERNAL_URL || process.env.HAMS_API_PROXY_TARGET;
-  if (typeof raw === 'string' && raw.trim()) return raw.trim().replace(/\/+$/, '');
-  // Fallback when ops set NEXT_PUBLIC_API_URL to the public Railway URL only.
+  const internal = sanitizeBackendUrl(
+    process.env.HAMS_BACKEND_INTERNAL_URL || process.env.HAMS_API_PROXY_TARGET
+  );
+  if (internal) return internal;
   const pub = process.env.NEXT_PUBLIC_API_URL?.trim();
-  if (pub && /^https?:\/\//i.test(pub)) return pub.replace(/\/+$/, '');
+  if (pub && /^https?:\/\//i.test(pub) && !isDeadApiHost(pub)) return pub.replace(/\/+$/, '');
   return '';
 }
 
@@ -20,36 +22,22 @@ export function backendNotConfiguredResponse() {
   );
 }
 
-/** Known misconfiguration: api.* DNS is not the HAMS API host. */
-function misconfiguredBackendResponse(base: string) {
-  try {
-    const host = new URL(base).hostname.toLowerCase();
-    if (host === 'api.hawanaairways.com') {
-      return Response.json(
-        {
-          error: 'Invalid backend URL on Vercel',
-          hint:
-            'api.hawanaairways.com does not resolve to the HAMS API. In Vercel Production, set HAMS_BACKEND_INTERNAL_URL to your Railway URL (https://YOUR-SERVICE.up.railway.app), set NEXT_PUBLIC_API_URL=/api, remove any api.hawanaairways.com values, then redeploy.',
-          configured: base
-        },
-        { status: 503 }
-      );
-    }
-  } catch {
-    /* ignore */
-  }
-  return null;
-}
-
 /** Proxy a request to the HAMS backend (Path B). */
 export async function proxyToBackend(
   req: NextRequest,
   backendPath: string
 ): Promise<Response> {
   const base = getBackendInternalUrl();
-  if (!base) return backendNotConfiguredResponse();
-  const misconfigured = misconfiguredBackendResponse(base);
-  if (misconfigured) return misconfigured;
+  if (!base) {
+    return Response.json(
+      {
+        error: 'API backend not configured',
+        hint:
+          'Remove api.hawanaairways.com from Vercel Production env. Set HAMS_BACKEND_INTERNAL_URL=https://YOUR-SERVICE.up.railway.app, NEXT_PUBLIC_API_URL=/api, NEXT_PUBLIC_USE_API_PROXY=true, then redeploy with clear cache.'
+      },
+      { status: 503 }
+    );
+  }
 
   const search = req.nextUrl.search || '';
   const url = `${base}${backendPath.startsWith('/') ? backendPath : `/${backendPath}`}${search}`;

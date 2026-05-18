@@ -1,33 +1,25 @@
+import { isDeadApiHost, sanitizeBackendUrl } from '@/lib/dead-api-host';
+
 /**
  * Public API origin for browser fetches (no trailing slash).
- * Production options:
- * 1) NEXT_PUBLIC_API_URL=https://api.hawanaairways.com (direct; API must resolve in DNS)
- * 2) NEXT_PUBLIC_USE_API_PROXY=true + HAMS_BACKEND_INTERNAL_URL on Vercel (same-origin /api via Next rewrite)
+ * Production: Path B proxy — NEXT_PUBLIC_API_URL=/api + HAMS_BACKEND_INTERNAL_URL (Railway).
  */
 export function getPublicApiBaseUrl(): string {
+  const apiUrl = process.env.NEXT_PUBLIC_API_URL?.trim() ?? '';
   const useProxy =
     process.env.NEXT_PUBLIC_USE_API_PROXY === 'true' ||
-    process.env.NEXT_PUBLIC_API_URL === '/api';
+    apiUrl === '/api' ||
+    isDeadApiHost(apiUrl);
 
   if (useProxy) {
-    // Browser: same origin → Vercel rewrites /api/* to HAMS_BACKEND_INTERNAL_URL
     if (typeof window !== 'undefined') return '';
-    // SSR (rare for auth): use server-only backend URL if set
-    const internal = process.env.HAMS_BACKEND_INTERNAL_URL?.trim();
-    if (internal) return internal.replace(/\/+$/, '');
+    const internal = sanitizeBackendUrl(process.env.HAMS_BACKEND_INTERNAL_URL);
+    if (internal) return internal;
   }
 
-  const raw = process.env.NEXT_PUBLIC_API_URL;
-  const s = typeof raw === 'string' ? raw.trim() : '';
-  // Direct Railway/public API URL (requires backend CORS for this frontend origin).
-  if (s && s !== '/api' && /^https?:\/\//i.test(s)) return s.replace(/\/+$/, '');
+  const s = sanitizeBackendUrl(apiUrl);
+  if (s && s !== '/api' && /^https?:\/\//i.test(s)) return s;
 
-  // Path B on Vercel without NEXT_PUBLIC_* set at build → same-origin /api (requires rewrites + env in dashboard).
-  if (process.env.NODE_ENV === 'production' && typeof window !== 'undefined') {
-    return '';
-  }
-  if (process.env.NODE_ENV === 'production') {
-    return 'https://api.hawanaairways.com';
-  }
+  if (process.env.NODE_ENV === 'production') return '';
   return 'http://localhost:5013';
 }

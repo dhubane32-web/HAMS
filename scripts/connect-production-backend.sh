@@ -32,7 +32,10 @@ echo ">>> 3. Vercel Production env (hams-frontend)"
 cd "$FRONTEND"
 export VERCEL_TOKEN
 
-for name in HAMS_BACKEND_INTERNAL_URL NEXT_PUBLIC_USE_API_PROXY NEXT_PUBLIC_API_URL; do
+# Remove stale production vars (including any api.hawanaairways.com values).
+for name in \
+  HAMS_BACKEND_INTERNAL_URL HAMS_API_PROXY_TARGET \
+  NEXT_PUBLIC_API_URL NEXT_PUBLIC_USE_API_PROXY NEXT_PUBLIC_API_BASE; do
   npx --yes vercel@41.4.0 env rm "$name" production --token "$VERCEL_TOKEN" -y 2>/dev/null || true
 done
 
