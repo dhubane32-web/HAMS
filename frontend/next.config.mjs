@@ -28,6 +28,7 @@ const appShellCacheHeaders = [
 ];
 
 const APP_SHELL_PATHS = [
+  '/',
   '/dashboard',
   '/booking',
   '/bookings',
