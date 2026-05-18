@@ -356,7 +356,7 @@ export default function BookingsPage() {
         {isLoading ? (
           <SkeletonBlock rows={5} />
         ) : (
-          <div style={{ overflowX: 'auto' }}>
+          <div className="hams-table-wrap">
             <table className="module-table">
               <thead>
                 <tr>

@@ -12,7 +12,18 @@
 }
 
 * { box-sizing: border-box; }
-html, body { margin: 0; padding: 0; font-family: inherit; background: var(--surface); color: var(--text); }
+html, body {
+  margin: 0;
+  padding: 0;
+  font-family: inherit;
+  background: var(--surface);
+  color: var(--text);
+  max-width: 100vw;
+  overflow-x: hidden;
+}
+html {
+  overflow-x: hidden;
+}
 a { color: inherit; text-decoration: none; }
 
 #nprogress .bar { height: 3px; background: linear-gradient(90deg, #0ea5e9, #22d3ee, #34d399); }
@@ -20,6 +31,8 @@ a { color: inherit; text-decoration: none; }
 .icon-btn {
   width: 34px;
   height: 34px;
+  min-width: 34px;
+  min-height: 34px;
   border: 1px solid #dbe5f5;
   border-radius: 10px;
   background: #fff;
@@ -27,6 +40,7 @@ a { color: inherit; text-decoration: none; }
   align-items: center;
   justify-content: center;
   cursor: pointer;
+  flex-shrink: 0;
 }
 
 .ops-shell { min-height: 100vh; display: grid; grid-template-columns: 280px 1fr; }
@@ -514,11 +528,32 @@ a { color: inherit; text-decoration: none; }
 .hams-status-card small { display: block; margin-top: .3rem; font-size: .7rem; color: rgba(255,255,255,.85); }
 .hams-sidebar-footer { color: rgba(255,255,255,.8); font-size: .68rem; padding: .2rem .1rem 0; }
 
-.hams-main-content { padding: 0.8rem; display: grid; gap: 0.85rem; }
-.hams-topbar {
-  background: #fff; border: 1px solid #dbe5f5; border-radius: 14px;
-  padding: .6rem .8rem; display: grid; grid-template-columns: auto 220px 1fr auto; gap: .7rem; align-items: center;
+.hams-main-content {
+  padding: 0.8rem;
+  padding-left: max(0.8rem, env(safe-area-inset-left));
+  padding-right: max(0.8rem, env(safe-area-inset-right));
+  display: grid;
+  gap: 0.85rem;
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
 }
+.hams-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 24;
+  background: #fff;
+  border: 1px solid #dbe5f5;
+  border-radius: 14px;
+  padding: 0.6rem 0.8rem;
+  padding-top: max(0.6rem, env(safe-area-inset-top));
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) minmax(140px, 220px) auto;
+  gap: 0.7rem;
+  align-items: center;
+}
+.hams-desktop-only { display: inline-flex; }
 .hams-page-title h2 { margin: 0; font-size: 1.05rem; color: #0f172a; }
 .hams-page-title p { margin: 0.15rem 0 0; color: #64748b; font-size: .78rem; }
 .hams-page-title-with-brand { display: flex; align-items: center; gap: 0.65rem; min-width: 0; }
@@ -549,7 +584,25 @@ a { color: inherit; text-decoration: none; }
 .hams-profile-btn span { display: grid; text-align: left; }
 .hams-profile-btn strong { font-size: .75rem; color: #0f172a; line-height: 1.1; }
 .hams-profile-btn small { font-size: .66rem; color: #64748b; }
-.hams-page-transition { display: grid; gap: .9rem; }
+.hams-page-transition {
+  display: grid;
+  gap: .9rem;
+  min-width: 0;
+  width: 100%;
+  overflow-x: hidden;
+  animation: hams-page-in 0.22s ease-out;
+}
+@keyframes hams-page-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .hams-page-transition { animation: none; }
+  .hams-sidebar { transition: none !important; }
+  .sidebar-backdrop { transition: none !important; }
+}
+.hams-menu-btn { flex-shrink: 0; }
+.hams-page-subtitle { display: block; }
 
 /* Dashboard */
 .dashboard-page { display: grid; gap: .75rem; }
@@ -716,10 +769,57 @@ a { color: inherit; text-decoration: none; }
 .notif-open { font-size: .78rem; font-weight: 700; color: #1d4ed8; white-space: nowrap; }
 
 /* Modules */
-.module-page { display: grid; gap: .75rem; }
+.module-page { display: grid; gap: .75rem; min-width: 0; width: 100%; }
+.module-page.ops-shell,
+.module-page.ops-shell-page,
+.ops-shell-page {
+  grid-template-columns: 1fr;
+  min-height: auto;
+  display: grid;
+  gap: 0.75rem;
+}
 .module-card { background: #fff; border: 1px solid #dbe5f5; border-radius: 12px; padding: .75rem; display: grid; gap: .55rem; }
 .module-card h1, .module-card h2, .module-card h3 { margin: 0; color: #001F5B; }
-.module-form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: .5rem; align-items: center; }
+.module-form-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.5rem;
+  align-items: center;
+}
+@media (min-width: 768px) {
+  .module-form-grid {
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  }
+}
+.module-btn-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  align-items: stretch;
+}
+@media (min-width: 640px) {
+  .module-btn-row {
+    flex-direction: row;
+    align-items: center;
+  }
+}
+.hams-table-wrap {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  margin-left: -0.75rem;
+  margin-right: -0.75rem;
+  padding-left: 0.75rem;
+  padding-right: 0.75rem;
+}
+.module-card:has(> .module-table),
+.module-card:has(> .hams-table-wrap),
+.module-page > .module-table {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  max-width: 100%;
+}
 .module-form-grid input, .module-form-grid select, .module-card input, .module-card select {
   border: 1px solid #cbd5e1; border-radius: 9px; padding: .55rem .65rem; font-size: .84rem; width: 100%;
 }
@@ -759,21 +859,256 @@ a { color: inherit; text-decoration: none; }
 @media (max-width: 1200px) {
   .dashboard-main-grid { grid-template-columns: 1fr 1fr; }
   .dashboard-card.large, .dashboard-card.wide { grid-column: auto; }
-  .hams-topbar { grid-template-columns: auto 1fr auto; }
-  .hams-page-title { display: none; }
+  .hams-topbar { grid-template-columns: auto minmax(0, 1fr) auto; }
+  .hams-search { display: none; }
 }
 
-@media (max-width: 980px) {
-  .hams-shell { grid-template-columns: 1fr; }
-  .hams-sidebar { position: fixed; width: 280px; transform: translateX(-110%); z-index: 32; transition: transform .25s ease; }
-  .hams-sidebar.open { transform: translateX(0); }
-  .hams-topbar { grid-template-columns: auto 1fr auto; }
-  .hams-search { display: none; }
-  .dashboard-stat-grid { grid-template-columns: repeat(2,1fr); }
-  .dashboard-quick-grid { grid-template-columns: repeat(2, minmax(90px, 1fr)); }
-  .dashboard-module-grid { grid-template-columns: 1fr; }
-  .two-col, .dashboard-main-grid { grid-template-columns: 1fr; }
-  .ops-metrics { grid-template-columns: repeat(2,1fr); }
+/* HAMS shell — mobile drawer below lg (1024px) */
+@media (max-width: 1023px) {
+  .hams-shell,
+  .hams-shell.sidebar-collapsed {
+    grid-template-columns: 1fr;
+  }
+  .hams-sidebar {
+    position: fixed;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: min(80vw, 280px);
+    max-width: min(80vw, 280px);
+    height: 100%;
+    height: 100dvh;
+    transform: translateX(-105%);
+    z-index: 50;
+    transition: transform 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+    border-radius: 0 16px 16px 0;
+    box-shadow: 8px 0 32px rgba(2, 6, 23, 0.28);
+    padding-top: max(0.75rem, env(safe-area-inset-top));
+    padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+    padding-left: max(0.65rem, env(safe-area-inset-left));
+    padding-right: 0.65rem;
+    overscroll-behavior: contain;
+  }
+  .hams-sidebar.open {
+    transform: translateX(0);
+  }
+  .hams-sidebar-collapse-btn {
+    display: none !important;
+  }
+  .hams-drawer-brand h1 {
+    font-size: 0.78rem;
+    letter-spacing: 0.02em;
+  }
+  .hams-drawer-brand p {
+    font-size: 0.62rem;
+    max-width: 9.5rem;
+    line-height: 1.3;
+  }
+  .hams-drawer-logo {
+    max-width: 96px !important;
+  }
+  .hams-nav-list {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+  }
+  .sidebar-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    border: none;
+    z-index: 40;
+    cursor: pointer;
+    padding: 0;
+    animation: hams-backdrop-in 0.2s ease-out;
+  }
+  @keyframes hams-backdrop-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+  .mobile-only {
+    display: inline-flex;
+  }
+  .hams-desktop-only {
+    display: none !important;
+  }
+  .hams-topbar {
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 0.45rem;
+    min-height: 56px;
+    z-index: 45;
+    padding-top: max(0.5rem, env(safe-area-inset-top));
+    padding-bottom: 0.5rem;
+  }
+  .hams-page-title {
+    display: flex !important;
+    flex: 1;
+    min-width: 0;
+  }
+  .hams-page-title h2 {
+    font-size: 0.95rem;
+  }
+  .hams-page-subtitle {
+    font-size: 0.7rem;
+  }
+  .hams-search {
+    display: none;
+  }
+  .hams-topbar-actions {
+    flex-shrink: 0;
+  }
+  .hams-profile-text {
+    display: none;
+  }
+  .hams-profile-btn .lucide-chevron-right,
+  .hams-profile-btn svg:last-child {
+    display: none;
+  }
+  .icon-btn {
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+    min-height: 44px;
+  }
+  .hams-nav-item {
+    min-height: 44px;
+    padding-top: 0.65rem;
+    padding-bottom: 0.65rem;
+  }
+  .hams-main-content {
+    padding: 0.5rem;
+    padding-left: max(0.5rem, env(safe-area-inset-left));
+    padding-right: max(0.5rem, env(safe-area-inset-right));
+  }
+  .module-table {
+    font-size: 0.8125rem;
+  }
+  .module-card {
+    padding: 12px;
+  }
+  .module-card input,
+  .module-card select,
+  .module-form-grid input,
+  .module-form-grid select {
+    width: 100%;
+  }
+  .stats-inline {
+    grid-template-columns: 1fr;
+  }
+  .two-col {
+    grid-template-columns: 1fr !important;
+  }
+  .dashboard-stat-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .dashboard-quick-grid {
+    grid-template-columns: repeat(2, minmax(90px, 1fr));
+  }
+  .dashboard-module-grid {
+    grid-template-columns: 1fr;
+  }
+  .dashboard-main-grid {
+    grid-template-columns: 1fr;
+  }
+  .ops-metrics {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .row-between {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+}
+
+@media (max-width: 767px) {
+  .module-page {
+    padding: 12px 16px;
+  }
+  .hams-page-subtitle {
+    display: none;
+  }
+}
+
+.booking-module {
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
+}
+.booking-module .booking-form-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.6rem;
+}
+@media (min-width: 640px) {
+  .booking-module .booking-form-grid {
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  }
+}
+.booking-module input,
+.booking-module select,
+.booking-module textarea {
+  width: 100%;
+  max-width: 100%;
+}
+
+@media (min-width: 1024px) {
+  .hams-sidebar {
+    transform: none !important;
+  }
+  .sidebar-backdrop {
+    display: none !important;
+  }
+  .mobile-only {
+    display: none !important;
+  }
+}
+
+body.hams-drawer-open {
+  overflow: hidden;
+  touch-action: none;
+}
+
+/* Modals — scrollable on small screens */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  background: rgba(15, 23, 42, 0.45);
+}
+.modal-card {
+  position: fixed;
+  z-index: 81;
+  left: max(0.75rem, env(safe-area-inset-left));
+  right: max(0.75rem, env(safe-area-inset-right));
+  top: max(0.75rem, env(safe-area-inset-top));
+  bottom: max(0.75rem, env(safe-area-inset-bottom));
+  margin: auto;
+  width: min(480px, 100%);
+  max-height: min(90vh, 90dvh);
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 1.1rem 1.25rem;
+  align-self: center;
+}
+.glass-card {
+  background: #fff;
+  border: 1px solid #dbe5f5;
+  border-radius: 14px;
+  box-shadow: 0 18px 46px rgba(15, 23, 42, 0.14);
+}
+.glass-btn {
+  border: 1px solid #dbe5f5;
+  background: #f8fafc;
+  border-radius: 9px;
+  padding: 0.5rem 0.75rem;
+  cursor: pointer;
+  min-height: 44px;
 }
 
 /* Strict requested login */

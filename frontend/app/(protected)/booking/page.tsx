@@ -128,15 +128,15 @@ export default function BookingPage() {
   const [searchError, setSearchError] = useState('');
   const [hasSearched, setHasSearched] = useState(false);
 
-  const [passengerFullName, setPassengerFullName] = useState('Hawana Traveler');
+  const [passengerFullName, setPassengerFullName] = useState('');
   const [passengerGender, setPassengerGender] = useState('MALE');
-  const [passengerDob, setPassengerDob] = useState('1996-01-10');
-  const [passengerNationality, setPassengerNationality] = useState('Kenyan');
-  const [passengerPassportNo, setPassengerPassportNo] = useState('P1234567');
-  const [passengerPassportExpiry, setPassengerPassportExpiry] = useState('2030-12-31');
-  const [passengerPhone, setPassengerPhone] = useState('+254700000000');
-  const [passengerEmail, setPassengerEmail] = useState('guest@hawana.aero');
-  const [passengerEmergencyContact, setPassengerEmergencyContact] = useState('+254711111111');
+  const [passengerDob, setPassengerDob] = useState('');
+  const [passengerNationality, setPassengerNationality] = useState('');
+  const [passengerPassportNo, setPassengerPassportNo] = useState('');
+  const [passengerPassportExpiry, setPassengerPassportExpiry] = useState('');
+  const [passengerPhone, setPassengerPhone] = useState('');
+  const [passengerEmail, setPassengerEmail] = useState('');
+  const [passengerEmergencyContact, setPassengerEmergencyContact] = useState('');
   const [outboundFareAmount, setOutboundFareAmount] = useState('220');
   const [inboundFareAmount, setInboundFareAmount] = useState('220');
   const [fareClasses, setFareClasses] = useState<FareClassRow[]>([]);
@@ -703,7 +703,7 @@ export default function BookingPage() {
   }
 
   return (
-    <main style={{ display: 'flex', flexDirection: 'column', gap: 0, padding: 0, minHeight: '100%' }}>
+    <main className="booking-module module-page" style={{ display: 'flex', flexDirection: 'column', gap: 0, padding: 0, minHeight: '100%' }}>
       <div
         style={{
           position: 'sticky',
@@ -776,7 +776,7 @@ export default function BookingPage() {
             Return
           </button>
         </div>
-        <form onSubmit={handleSearchFlights} style={gridStyle}>
+        <form onSubmit={handleSearchFlights} className="booking-form-grid">
           <input value={from} onChange={(e) => setFrom(e.target.value.toUpperCase())} placeholder="From (IATA)" style={inputStyle} />
           <input value={to} onChange={(e) => setTo(e.target.value.toUpperCase())} placeholder="To (IATA)" style={inputStyle} />
           <input type="date" value={departureDate} onChange={(e) => setDepartureDate(e.target.value)} style={inputStyle} />
@@ -823,7 +823,7 @@ export default function BookingPage() {
             {outboundFlights.length === 0 ? (
               <p style={{ fontSize: '0.9rem', color: '#64748b' }}>No outbound flights found for this route and date.</p>
             ) : (
-              <div style={{ overflowX: 'auto' }}>
+              <div className="hams-table-wrap">
                 <table style={flightTableStyle}>
                   <thead>
                     <tr>
@@ -882,7 +882,7 @@ export default function BookingPage() {
                 {inboundFlights.length === 0 ? (
                   <p style={{ fontSize: '0.9rem', color: '#64748b' }}>No inbound flights found for the return date.</p>
                 ) : (
-                  <div style={{ overflowX: 'auto' }}>
+                  <div className="hams-table-wrap">
                     <table style={flightTableStyle}>
                       <thead>
                         <tr>

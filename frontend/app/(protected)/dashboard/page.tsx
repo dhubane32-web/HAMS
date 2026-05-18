@@ -322,13 +322,13 @@ export default function DashboardPage() {
     : [];
 
   return (
-    <main className="min-h-screen bg-gradient-to-b from-slate-100 via-slate-50 to-slate-100 pb-12">
-      <div className="mx-auto max-w-[1600px] px-4 pt-6 sm:px-6 lg:px-8">
+    <main className="min-h-screen min-w-0 overflow-x-hidden bg-gradient-to-b from-slate-100 via-slate-50 to-slate-100 pb-12">
+      <div className="mx-auto max-w-[1600px] min-w-0 px-3 pt-4 sm:px-6 sm:pt-6 lg:px-8">
         {/* Header */}
         <header className="mb-6 flex flex-col gap-4 border-b border-slate-200/80 pb-6 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <p className="text-[0.65rem] font-bold uppercase tracking-[0.2em] text-hawana-blue">{BRAND.companyName}</p>
-            <h1 className="mt-1 text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">Executive command center</h1>
+            <h1 className="mt-1 text-xl font-bold tracking-tight text-slate-900 sm:text-3xl">Executive command center</h1>
             <p className="mt-1 max-w-2xl text-sm text-slate-600">
               Live operational, commercial, and financial snapshot for <strong>{roleTitle}</strong>. Data sourced from
               HAMS core services — refresh for latest counters.
@@ -381,7 +381,7 @@ export default function DashboardPage() {
 
         {/* Executive KPI strip */}
         {execCards.length > 0 && (
-          <section className="mb-8 grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-8" aria-label="Executive KPIs">
+          <section className="mb-8 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4" aria-label="Executive KPIs">
             {execCards.map((c) => {
               const Icon = c.icon;
               return (
@@ -408,7 +408,7 @@ export default function DashboardPage() {
         <div className="grid gap-6 xl:grid-cols-12">
           {/* Flight operations */}
           <section className="xl:col-span-7">
-            <div className="rounded-2xl border border-slate-200/90 bg-white p-5 shadow-sm ring-1 ring-slate-900/5 sm:p-6">
+            <div className="rounded-2xl border border-slate-200/90 bg-white p-4 shadow-sm ring-1 ring-slate-900/5 sm:p-6">
               <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <h2 className="flex items-center gap-2 text-lg font-bold text-slate-900">
@@ -486,10 +486,10 @@ export default function DashboardPage() {
             {/* Charts row */}
             {(canFinance || chart7d.some((d) => d.amount > 0)) && (
               <div className="mt-6 grid gap-6 lg:grid-cols-2">
-                <div className="rounded-2xl border border-slate-200/90 bg-white p-5 shadow-sm ring-1 ring-slate-900/5">
+                <div className="min-w-0 overflow-hidden rounded-2xl border border-slate-200/90 bg-white p-4 shadow-sm ring-1 ring-slate-900/5 sm:p-5">
                   <h3 className="text-sm font-bold text-slate-900">Revenue trend (7 days)</h3>
                   <p className="text-xs text-slate-500">Posted payment totals by day</p>
-                  <div className="mt-3 h-56 w-full min-w-0">
+                  <div className="mt-3 h-56 w-full min-w-0 overflow-hidden">
                     {chart7d.length > 0 ? (
                       <ResponsiveContainer width="100%" height="100%">
                         <LineChart data={chart7d}>
@@ -510,9 +510,9 @@ export default function DashboardPage() {
                   </div>
                 </div>
                 {mixData.length > 0 && canFinance && (
-                  <div className="rounded-2xl border border-slate-200/90 bg-white p-5 shadow-sm ring-1 ring-slate-900/5">
+                  <div className="min-w-0 overflow-hidden rounded-2xl border border-slate-200/90 bg-white p-4 shadow-sm ring-1 ring-slate-900/5 sm:p-5">
                     <h3 className="text-sm font-bold text-slate-900">Payment mix (7 days)</h3>
-                    <div className="mt-2 h-52 w-full min-w-0">
+                    <div className="mt-2 h-52 w-full min-w-0 overflow-hidden">
                       <ResponsiveContainer width="100%" height="100%">
                         <PieChart>
                           <Pie data={mixData} dataKey="value" nameKey="name" innerRadius={52} outerRadius={80} paddingAngle={2}>
@@ -565,7 +565,7 @@ export default function DashboardPage() {
                   </div>
                 </div>
                 <h3 className="mt-5 text-xs font-bold uppercase tracking-wide text-slate-500">Top routes (14d)</h3>
-                <div className="mt-2 h-40 w-full min-w-0">
+                <div className="mt-2 h-40 w-full min-w-0 overflow-hidden">
                   {ex.salesInsight.topRoutes.length > 0 ? (
                     <ResponsiveContainer width="100%" height="100%">
                       <BarChart data={ex.salesInsight.topRoutes} layout="vertical" margin={{ left: 4, right: 8 }}>
@@ -754,13 +754,14 @@ export default function DashboardPage() {
         </div>
 
         {/* Crew personal */}
-        {summary?.myFlights && summary.role === 'crew' && (
-          <div className="mt-6 rounded-2xl border border-slate-200/90 bg-white p-5 shadow-sm">
+            {summary?.myFlights && summary.role === 'crew' && (
+          <div className="mt-6 rounded-2xl border border-slate-200/90 bg-white p-4 shadow-sm sm:p-5">
             <h3 className="font-bold text-slate-900">My flights today</h3>
             {summary.myFlights.length === 0 ? (
               <p className="mt-2 text-sm text-slate-500">No rostered flights.</p>
             ) : (
-              <table className="mt-3 w-full text-sm">
+              <div className="hams-table-wrap mt-3">
+              <table className="w-full min-w-[28rem] text-sm">
                 <thead className="text-left text-xs uppercase text-slate-500">
                   <tr>
                     <th className="py-1">Flight</th>
@@ -786,6 +787,7 @@ export default function DashboardPage() {
                   ))}
                 </tbody>
               </table>
+              </div>
             )}
           </div>
         )}

@@ -1032,7 +1032,7 @@ export default function OperationsPage() {
   }
 
   return (
-    <main className="module-page ops-shell">
+    <main className="module-page ops-shell-page">
       <section className="module-card">
         <h1>Flight Operations</h1>
         <p style={{ marginTop: 0, color: '#64748b', maxWidth: '52rem' }}>
