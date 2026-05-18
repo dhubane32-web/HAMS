@@ -1544,3 +1544,65 @@ body.hams-drawer-open {
     border-radius: 1.25rem;
   }
 }
+
+/* OCC Phase 3 — live ops visual system */
+.occ-glass {
+  background: rgba(255, 255, 255, 0.82);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+}
+
+.occ-card-lift {
+  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+.occ-card-lift:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.08);
+}
+
+.occ-live-pulse {
+  animation: occ-live-pulse 2.4s ease-in-out infinite;
+}
+
+@keyframes occ-live-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.65;
+    transform: scale(1.15);
+  }
+}
+
+.occ-severity-normal {
+  border-color: rgba(14, 165, 233, 0.35);
+}
+
+.occ-severity-warning {
+  border-color: rgba(245, 158, 11, 0.45);
+}
+
+.occ-severity-critical {
+  border-color: rgba(220, 38, 38, 0.5);
+}
+
+.occ-feed-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: #cbd5e1 transparent;
+}
+
+.occ-plane-dot {
+  animation: occ-plane-slide 3s ease-in-out infinite alternate;
+}
+
+@keyframes occ-plane-slide {
+  0% {
+    transform: translateY(-50%) translateX(-1px);
+  }
+  100% {
+    transform: translateY(-50%) translateX(1px);
+  }
+}

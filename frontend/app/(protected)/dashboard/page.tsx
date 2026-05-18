@@ -45,6 +45,8 @@ import { getClientAuthToken, hydrateSessionFromCookie } from '@/lib/auth-session
 import { apiFetchJson } from '@/lib/api-client';
 import { OperationsCommandSection } from '@/components/dashboard/ops';
 import type { OperationalIntel } from '@/components/dashboard/ops';
+import { OccPhase3Section } from '@/components/dashboard/occ-phase3';
+import type { OccPhase3 } from '@/components/dashboard/occ-phase3';
 
 const MIX_COLORS = ['#0047AB', '#0EA5E9', '#16A34A', '#F59E0B', '#8B5CF6', '#DB2777'];
 
@@ -134,6 +136,7 @@ type ExecutiveBoard = {
   };
   reportQuickLinks: { label: string; href: string }[];
   operationalIntel?: OperationalIntel | null;
+  occPhase3?: OccPhase3 | null;
 };
 
 type Summary = {
@@ -298,6 +301,7 @@ export default function DashboardPage() {
   const canOpsCommand =
     moduleRole && ['admin', 'super_admin', 'operations'].includes(moduleRole as UserRole);
   const operationalIntel = ex?.operationalIntel ?? null;
+  const occPhase3 = ex?.occPhase3 ?? null;
   const canCs = moduleRole && ['admin', 'super_admin', 'customer_service', 'sales_manager', 'agent'].includes(moduleRole as UserRole);
 
   const execCards = ex
@@ -379,6 +383,10 @@ export default function DashboardPage() {
             onRefresh={() => void load()}
             loading={refreshing}
           />
+        )}
+
+        {canOpsCommand && occPhase3 && (
+          <OccPhase3Section data={occPhase3} onRefresh={() => void load()} loading={refreshing} />
         )}
 
         {loadError && (

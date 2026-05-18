@@ -21,7 +21,7 @@ export function LiveDataBadge({ updatedAt, onRefresh, loading }: Props) {
       <span className="inline-flex items-center gap-2 rounded-full border border-emerald-200/80 bg-emerald-50/90 px-3 py-1 text-xs font-semibold text-emerald-900">
         <span className="relative flex h-2 w-2" aria-hidden>
           <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-500 opacity-60" />
-          <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-600" />
+          <span className="occ-live-pulse relative inline-flex h-2 w-2 rounded-full bg-emerald-600" />
         </span>
         Live ops feed
       </span>
