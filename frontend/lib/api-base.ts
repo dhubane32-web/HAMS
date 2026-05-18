@@ -19,7 +19,8 @@ export function getPublicApiBaseUrl(): string {
 
   const raw = process.env.NEXT_PUBLIC_API_URL;
   const s = typeof raw === 'string' ? raw.trim() : '';
-  if (s && s !== '/api') return s.replace(/\/+$/, '');
+  // Direct Railway/public API URL (requires backend CORS for this frontend origin).
+  if (s && s !== '/api' && /^https?:\/\//i.test(s)) return s.replace(/\/+$/, '');
 
   // Path B on Vercel without NEXT_PUBLIC_* set at build → same-origin /api (requires rewrites + env in dashboard).
   if (process.env.NODE_ENV === 'production' && typeof window !== 'undefined') {

@@ -31,7 +31,9 @@ Use this when the API runs on **Railway** and the frontend is **`hams-frontend.v
 |------|--------|
 | `HAMS_BACKEND_INTERNAL_URL` | `https://YOUR-SERVICE.up.railway.app` (no trailing slash) |
 | `NEXT_PUBLIC_USE_API_PROXY` | `true` |
-| `NEXT_PUBLIC_API_URL` | `/api` |
+| `NEXT_PUBLIC_API_URL` | `/api` (same-origin proxy — **not** the Railway hostname in the browser) |
+
+**Alternative (direct to Railway, no Vercel proxy):** set `NEXT_PUBLIC_API_URL` to the Railway URL and `HAMS_BACKEND_INTERNAL_URL` to the same URL; ensure Railway `FRONTEND_URL` includes your Vercel/custom domains.
 | `NEXT_PUBLIC_SITE_URL` | `https://hams.hawanaairways.com` (or `https://hams-frontend.vercel.app` if custom domain not ready) |
 
 Optional:
@@ -43,7 +45,7 @@ Optional:
 **Railway `FRONTEND_URL` (CORS):**  
 `https://hams.hawanaairways.com,https://hams-frontend.vercel.app`
 
-**Important:** `HAMS_BACKEND_INTERNAL_URL` must exist for **Production** before the redeploy below (rewrites read it at build time).
+**Important:** `HAMS_BACKEND_INTERNAL_URL` must exist for **Production** before redeploy. The app proxies `/health` and `/api/*` at **runtime** via route handlers (and build-time rewrites when the var is present at build).
 
 ---
 

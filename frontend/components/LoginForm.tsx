@@ -256,6 +256,18 @@ export default function LoginForm() {
         return;
       }
 
+      if (response.status === 503 || response.status === 502) {
+        const body = result as { hint?: string; message?: string; error?: string };
+        const msg =
+          body.hint ||
+          body.message ||
+          body.error ||
+          'Authentication service is not connected. Operations must set HAMS_BACKEND_INTERNAL_URL on Vercel to the live Railway API URL.';
+        setFormError(msg);
+        toast.error('Unable to connect to backend service.');
+        return;
+      }
+
       if (!response.ok) {
         const msg = (result as { message?: string }).message || 'Sign-in failed. Check your email and password.';
         setFormError(msg);

@@ -116,8 +116,9 @@ async function start() {
     process.exit(1);
   }
 
-  const server = app.listen(PORT, () => {
-    console.log(`HAMS backend running on http://localhost:${PORT}`);
+  const host = process.env.HOST || '0.0.0.0';
+  const server = app.listen(PORT, host, () => {
+    console.log(`HAMS backend running on http://${host}:${PORT}`);
   });
   startBackupScheduler();
   server.on('error', (err) => {

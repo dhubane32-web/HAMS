@@ -3,7 +3,11 @@ import type { NextRequest } from 'next/server';
 /** Server-only Railway/VPS API base (Vercel env). */
 export function getBackendInternalUrl(): string {
   const raw = process.env.HAMS_BACKEND_INTERNAL_URL || process.env.HAMS_API_PROXY_TARGET;
-  return typeof raw === 'string' ? raw.trim().replace(/\/+$/, '') : '';
+  if (typeof raw === 'string' && raw.trim()) return raw.trim().replace(/\/+$/, '');
+  // Fallback when ops set NEXT_PUBLIC_API_URL to the public Railway URL only.
+  const pub = process.env.NEXT_PUBLIC_API_URL?.trim();
+  if (pub && /^https?:\/\//i.test(pub)) return pub.replace(/\/+$/, '');
+  return '';
 }
 
 export function backendNotConfiguredResponse() {
@@ -40,7 +44,21 @@ export async function proxyToBackend(
     init.body = await req.arrayBuffer();
   }
 
-  const upstream = await fetch(url, init);
+  let upstream: Response;
+  try {
+    upstream = await fetch(url, { ...init, signal: AbortSignal.timeout(25_000) });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'fetch failed';
+    return Response.json(
+      {
+        error: 'Backend unreachable',
+        message: `Could not reach HAMS API at ${base}. Check Railway service health and HAMS_BACKEND_INTERNAL_URL on Vercel.`,
+        detail: msg
+      },
+      { status: 502 }
+    );
+  }
+
   const outHeaders = new Headers(upstream.headers);
   outHeaders.delete('transfer-encoding');
   return new Response(upstream.body, {
