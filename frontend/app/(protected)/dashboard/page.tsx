@@ -322,13 +322,13 @@ export default function DashboardPage() {
     : [];
 
   return (
-    <main className="min-h-screen min-w-0 overflow-x-hidden bg-gradient-to-b from-slate-100 via-slate-50 to-slate-100 pb-12">
-      <div className="mx-auto max-w-[1600px] min-w-0 px-3 pt-4 sm:px-6 sm:pt-6 lg:px-8">
+    <main className="min-h-dvh min-w-0 overflow-x-hidden bg-gradient-to-b from-slate-100 via-slate-50 to-slate-100 pb-[max(1.5rem,env(safe-area-inset-bottom))] sm:pb-12">
+      <div className="mx-auto max-w-[1600px] min-w-0 px-3 pt-[max(1rem,env(safe-area-inset-top))] sm:px-6 sm:pt-6 lg:px-8">
         {/* Header */}
         <header className="mb-6 flex flex-col gap-4 border-b border-slate-200/80 pb-6 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <p className="text-[0.65rem] font-bold uppercase tracking-[0.2em] text-hawana-blue">{BRAND.companyName}</p>
-            <h1 className="mt-1 text-xl font-bold tracking-tight text-slate-900 sm:text-3xl">Executive command center</h1>
+            <h1 className="mt-1 text-balance text-lg font-bold tracking-tight text-slate-900 sm:text-3xl">Executive command center</h1>
             <p className="mt-1 max-w-2xl text-sm text-slate-600">
               Live operational, commercial, and financial snapshot for <strong>{roleTitle}</strong>. Data sourced from
               HAMS core services — refresh for latest counters.
@@ -411,8 +411,8 @@ export default function DashboardPage() {
             <div className="rounded-2xl border border-slate-200/90 bg-white p-4 shadow-sm ring-1 ring-slate-900/5 sm:p-6">
               <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
                 <div>
-                  <h2 className="flex items-center gap-2 text-lg font-bold text-slate-900">
-                    <Radar className="h-5 w-5 text-hawana-blue" aria-hidden />
+                  <h2 className="flex items-center gap-2 text-balance text-base font-bold text-slate-900 sm:text-lg">
+                    <Radar className="h-5 w-5 shrink-0 text-hawana-blue" aria-hidden />
                     Flight Operations
                   </h2>
                   <p className="text-sm text-slate-500">Departures, arrivals, punctuality, and fleet posture (today).</p>
@@ -489,7 +489,7 @@ export default function DashboardPage() {
                 <div className="min-w-0 overflow-hidden rounded-2xl border border-slate-200/90 bg-white p-4 shadow-sm ring-1 ring-slate-900/5 sm:p-5">
                   <h3 className="text-sm font-bold text-slate-900">Revenue trend (7 days)</h3>
                   <p className="text-xs text-slate-500">Posted payment totals by day</p>
-                  <div className="mt-3 h-56 w-full min-w-0 overflow-hidden">
+                  <div className="mt-3 h-44 w-full min-w-0 overflow-hidden sm:h-56">
                     {chart7d.length > 0 ? (
                       <ResponsiveContainer width="100%" height="100%">
                         <LineChart data={chart7d}>
@@ -512,7 +512,7 @@ export default function DashboardPage() {
                 {mixData.length > 0 && canFinance && (
                   <div className="min-w-0 overflow-hidden rounded-2xl border border-slate-200/90 bg-white p-4 shadow-sm ring-1 ring-slate-900/5 sm:p-5">
                     <h3 className="text-sm font-bold text-slate-900">Payment mix (7 days)</h3>
-                    <div className="mt-2 h-52 w-full min-w-0 overflow-hidden">
+                    <div className="mt-2 h-44 w-full min-w-0 overflow-hidden sm:h-52">
                       <ResponsiveContainer width="100%" height="100%">
                         <PieChart>
                           <Pie data={mixData} dataKey="value" nameKey="name" innerRadius={52} outerRadius={80} paddingAngle={2}>
@@ -542,8 +542,8 @@ export default function DashboardPage() {
           <aside className="flex flex-col gap-6 xl:col-span-5">
             {ex && (
               <div className="rounded-2xl border border-slate-200/90 bg-white p-5 shadow-sm ring-1 ring-slate-900/5">
-                <h2 className="flex items-center gap-2 text-lg font-bold text-slate-900">
-                  <ShoppingCart className="h-5 w-5 text-hawana-blue" aria-hidden />
+                <h2 className="flex items-center gap-2 text-balance text-base font-bold text-slate-900 sm:text-lg">
+                  <ShoppingCart className="h-5 w-5 shrink-0 text-hawana-blue" aria-hidden />
                   Commercial & sales
                 </h2>
                 <div className="mt-4 grid gap-3 sm:grid-cols-2">
@@ -565,7 +565,7 @@ export default function DashboardPage() {
                   </div>
                 </div>
                 <h3 className="mt-5 text-xs font-bold uppercase tracking-wide text-slate-500">Top routes (14d)</h3>
-                <div className="mt-2 h-40 w-full min-w-0 overflow-hidden">
+                <div className="mt-2 h-36 w-full min-w-0 overflow-hidden sm:h-40">
                   {ex.salesInsight.topRoutes.length > 0 ? (
                     <ResponsiveContainer width="100%" height="100%">
                       <BarChart data={ex.salesInsight.topRoutes} layout="vertical" margin={{ left: 4, right: 8 }}>

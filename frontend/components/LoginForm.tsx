@@ -2,7 +2,6 @@
 
 import { FormEvent, useEffect, useState } from 'react';
 import Link from 'next/link';
-import BrandLogo from '@/components/BrandLogo';
 import { useRouter } from 'next/navigation';
 import { AlertCircle, ArrowRight, Eye, EyeOff, Loader2, Lock, ShieldCheck, User } from 'lucide-react';
 import toast from 'react-hot-toast';
@@ -311,30 +310,22 @@ export default function LoginForm() {
     }
   }
 
-  const inputRing = 'ring-hawana-blue/25 focus:border-hawana-blue focus:bg-white focus:ring-2';
+  const inputRing =
+    'focus-visible:border-hawana-blue focus-visible:bg-white focus-visible:ring-2 focus-visible:ring-hawana-blue/30';
   const inputBase =
-    'w-full rounded-xl border bg-slate-50/90 py-2.5 pl-10 pr-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 hover:border-slate-300';
+    'w-full rounded-xl border bg-white/70 py-3 pl-10 pr-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 hover:border-slate-300';
 
   return (
-    <div className="mx-auto w-full max-w-md">
-      <div className="mb-6 flex justify-end">
-        <span className="rounded-full border border-slate-200/90 bg-white/90 px-3 py-1 text-xs font-medium text-slate-600 shadow-sm backdrop-blur-sm">
+    <div className="w-full">
+      <div className="mb-4 flex justify-end">
+        <span className="rounded-full border border-slate-200/80 bg-white/60 px-3 py-1 text-xs font-medium text-slate-600">
           English
         </span>
       </div>
 
-      <div className="mb-8 flex justify-center">
-        <BrandLogo variant="light" placement="login" priority />
-      </div>
-
-      <form
-        method="post"
-        onSubmit={handleSubmit}
-        className="rounded-2xl border border-slate-200/90 bg-white/95 p-6 shadow-card backdrop-blur-sm sm:p-8"
-        noValidate
-      >
-        <div className="mb-8 space-y-3 text-center">
-          <h2 className="text-xl font-bold tracking-tight text-slate-900 sm:text-2xl">Welcome back</h2>
+      <form method="post" onSubmit={handleSubmit} className="flex flex-col gap-3 sm:gap-4" noValidate>
+        <div className="space-y-2 text-center sm:space-y-3">
+          <h2 className="text-balance text-lg font-bold tracking-tight text-slate-900 sm:text-2xl">Welcome back</h2>
           <p className="text-pretty text-sm leading-relaxed text-slate-600">
             Corporate sign-in — access follows your assigned role
           </p>
@@ -350,7 +341,7 @@ export default function LoginForm() {
           </div>
         ) : null}
 
-        <div className="space-y-5">
+        <div className="space-y-4 sm:space-y-5">
           {authStep === 'pwd_expired' ? (
             <div className="space-y-4">
               <p className="text-sm text-slate-600">
@@ -541,7 +532,7 @@ export default function LoginForm() {
           <button
             type="submit"
             disabled={isLoading}
-            className="group flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-hawana-blue to-hawana-navy py-3 text-sm font-semibold text-white shadow-md transition hover:shadow-lg hover:brightness-[1.03] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-hawana-blue active:scale-[0.99] disabled:pointer-events-none disabled:opacity-55"
+            className="group flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-hawana-blue to-hawana-navy py-3.5 text-base font-semibold text-white shadow-lg shadow-hawana-navy/25 transition duration-200 hover:shadow-xl hover:brightness-[1.04] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-hawana-blue focus-visible:ring-offset-2 active:scale-[0.99] disabled:pointer-events-none disabled:opacity-55"
           >
             {isLoading ? (
               <Loader2 className="h-[18px] w-[18px] shrink-0 animate-spin" aria-hidden />
@@ -567,12 +558,12 @@ export default function LoginForm() {
           </button>
         </div>
 
-        <div className="relative my-6">
+        <div className="relative my-4 sm:my-6">
           <div className="absolute inset-0 flex items-center" aria-hidden>
             <div className="w-full border-t border-slate-200" />
           </div>
           <div className="relative flex justify-center text-[0.65rem] font-semibold uppercase tracking-[0.14em] text-slate-500">
-            <span className="bg-white px-3">Or continue with</span>
+            <span className="bg-white/90 px-3">Or continue with</span>
           </div>
         </div>
 
@@ -595,7 +586,7 @@ export default function LoginForm() {
           </button>
         </div>
 
-        <p className="mt-6 flex items-start gap-2 rounded-xl border border-emerald-100 bg-emerald-50/60 px-3 py-2.5 text-left text-xs text-slate-600">
+        <p className="mt-4 flex items-start gap-2 rounded-xl border border-emerald-100 bg-emerald-50/60 px-3 py-2.5 text-left text-xs text-slate-600 sm:mt-6">
           <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" strokeWidth={1.75} aria-hidden />
           <span>
             <strong className="text-slate-800">Role-based access.</strong> Your permissions are enforced server-side from
@@ -604,11 +595,10 @@ export default function LoginForm() {
         </p>
       </form>
 
-      <p className="mt-6 text-center text-xs text-slate-400">
-        <Link href="/" className="text-hawana-blue hover:underline">
+      <p className="mt-4 text-center text-xs text-slate-500">
+        <Link href="/" className="font-medium text-hawana-blue hover:underline">
           Public site
         </Link>
-        <span className="mx-2 text-slate-300">·</span>© {new Date().getFullYear()} Hawana Airways. All rights reserved.
       </p>
     </div>
   );
