@@ -70,11 +70,28 @@ export async function proxyToBackend(
     );
   }
 
+  const bodyText = await upstream.text();
+  if (
+    bodyText.includes('Application not found') &&
+    bodyText.includes('"code":404')
+  ) {
+    return Response.json(
+      {
+        error: 'Railway application not found',
+        message:
+          'HAMS_BACKEND_INTERNAL_URL points to a Railway hostname with no active deployment. In Railway: deploy the backend service, Settings → Networking → Generate domain, then paste that exact URL into Vercel Production env.',
+        configuredBackend: base
+      },
+      { status: 502 }
+    );
+  }
+
   const outHeaders = new Headers(upstream.headers);
   outHeaders.delete('transfer-encoding');
-  return new Response(upstream.body, {
+  const contentType = outHeaders.get('content-type');
+  return new Response(bodyText, {
     status: upstream.status,
     statusText: upstream.statusText,
-    headers: outHeaders
+    headers: contentType ? outHeaders : outHeaders
   });
 }
