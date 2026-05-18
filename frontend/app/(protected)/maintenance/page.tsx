@@ -197,7 +197,7 @@ export default function MaintenancePage() {
 
   return (
     <main style={{ padding: '2rem', display: 'grid', gap: '1rem' }}>
-      <h1 style={{ margin: 0, color: '#0d47a1' }}>Maintenance Module</h1>
+      <h1 style={{ margin: 0, color: '#0d47a1' }}>Aircraft Maintenance</h1>
       <p style={{ marginTop: 0 }}>Defect logging, inspection scheduling, release status, and maintenance history.</p>
 
       <section style={cardStyle}>

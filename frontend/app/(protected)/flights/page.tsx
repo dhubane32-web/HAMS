@@ -49,7 +49,7 @@ export default function FlightsPage() {
     <main className="module-page">
       <section className="module-card">
         <div className="row-between">
-          <h1>Flights & Operations</h1>
+          <h1>Flight Operations</h1>
           <button onClick={createFlight}>Create New Flight</button>
         </div>
         <table className="module-table">

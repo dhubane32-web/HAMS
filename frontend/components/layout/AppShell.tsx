@@ -17,8 +17,10 @@ import {
   LogOut
 } from 'lucide-react';
 import { navForRole, isNavActive } from '@/lib/nav-config';
+import { APP_BUILD_ID } from '@/lib/build-meta';
 import { roleDisplayName } from '@/lib/roles';
 import { clearClientSession, readSessionUser, type SessionUser } from '@/lib/auth-session';
+import { BRAND } from '@/lib/brand';
 import { notifyServerLogout } from '@/lib/auth-api';
 import { canAccessModule } from '@/lib/airline-rbac';
 import ModuleAccessGate from '@/components/layout/ModuleAccessGate';
@@ -45,7 +47,7 @@ export default function AppShell({ children }: Props) {
 
   const pageName = useMemo(() => {
     const item = nav.find((n) => isNavActive(pathname, n.href));
-    return item?.label ?? 'HAMS';
+    return item?.label ?? BRAND.systemName;
   }, [pathname, nav]);
 
   useEffect(() => {
@@ -89,17 +91,19 @@ export default function AppShell({ children }: Props) {
       </AnimatePresence>
 
       <motion.aside
+        key={`sidebar-${APP_BUILD_ID}`}
         className={`hams-sidebar ${collapsed ? 'collapsed' : ''} ${mobileOpen ? 'open' : ''}`}
         initial={{ x: -32, opacity: 0 }}
         animate={{ x: 0, opacity: 1 }}
+        data-hams-build={APP_BUILD_ID}
       >
         <div className="hams-sidebar-top">
           <div className="hams-brand">
             <BrandLogo variant="dark" placement={collapsed ? 'sidebarCollapsed' : 'sidebar'} priority />
             {!collapsed && (
               <div>
-                <h1>HAWANA AIRWAYS</h1>
-                <p>Hawana Airways Management System (HAMS)</p>
+                <h1>{BRAND.companyName.toUpperCase()}</h1>
+                <p>{BRAND.fullSystemName}</p>
               </div>
             )}
           </div>
@@ -108,7 +112,7 @@ export default function AppShell({ children }: Props) {
           </button>
         </div>
 
-        <nav className="hams-nav-list" aria-label="Primary">
+        <nav className="hams-nav-list" aria-label="Primary" data-nav-build={APP_BUILD_ID}>
           {nav.map((item) => {
             const Icon = item.icon;
             const active = isNavActive(pathname, item.href);
@@ -129,7 +133,9 @@ export default function AppShell({ children }: Props) {
           </strong>
           {!collapsed && <small>Core services connected</small>}
         </div>
-        <div className="hams-sidebar-footer">© 2026 Hawana Airways</div>
+        <div className="hams-sidebar-footer">
+          © {new Date().getFullYear()} {BRAND.companyName}
+        </div>
       </motion.aside>
 
       <main className="hams-main-content">
@@ -176,7 +182,7 @@ export default function AppShell({ children }: Props) {
               <LogOut size={16} />
             </button>
             <Link href="/workspace-settings" className="hams-profile-btn">
-              <Image src="/admin-avatar.svg" alt="" width={32} height={32} />
+              <Image src="/admin-avatar.svg" alt="" width={32} height={32} unoptimized />
               <span>
                 <strong>{user?.name ?? 'Account'}</strong>
                 <small>{roleLabel}</small>

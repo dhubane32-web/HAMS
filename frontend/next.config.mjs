@@ -19,6 +19,41 @@ const securityHeaders = [
   { key: 'Permissions-Policy', value: 'camera=(), microphone=(), geolocation=()' }
 ];
 
+/** Prevent browsers/CDN from serving stale HTML for authenticated app routes (sidebar labels). */
+const appShellCacheHeaders = [
+  { key: 'Cache-Control', value: 'private, no-cache, no-store, max-age=0, must-revalidate' },
+  { key: 'Pragma', value: 'no-cache' },
+  { key: 'CDN-Cache-Control', value: 'no-store' },
+  { key: 'Vercel-CDN-Cache-Control', value: 'no-store' }
+];
+
+const APP_SHELL_PATHS = [
+  '/dashboard',
+  '/booking',
+  '/bookings',
+  '/checkin',
+  '/operations',
+  '/flights',
+  '/maintenance',
+  '/crew',
+  '/finance',
+  '/sales',
+  '/customers',
+  '/reports',
+  '/settings',
+  '/admin',
+  '/notifications',
+  '/workspace-settings',
+  '/system-settings',
+  '/system-administration',
+  '/add-expense',
+  '/customer-service',
+  '/sales-marketing',
+  '/settings-master-data',
+  '/reports-analytics',
+  '/crew-management'
+];
+
 if (isProd) {
   securityHeaders.push({ key: 'Strict-Transport-Security', value: 'max-age=31536000; includeSubDomains' });
   // Intentionally no global Content-Security-Policy here: a single CSP on `/:path*`
@@ -55,7 +90,20 @@ const nextConfig = {
       }
     : {}),
   async headers() {
-    return [{ source: '/:path*', headers: securityHeaders }];
+    const appShellRoutes = APP_SHELL_PATHS.map((p) => ({
+      source: `${p}`,
+      headers: [...securityHeaders, ...appShellCacheHeaders]
+    }));
+    const appShellNested = APP_SHELL_PATHS.map((p) => ({
+      source: `${p}/:path*`,
+      headers: [...securityHeaders, ...appShellCacheHeaders]
+    }));
+    return [
+      { source: '/build-id.txt', headers: [{ key: 'Cache-Control', value: 'public, max-age=0, must-revalidate' }] },
+      ...appShellRoutes,
+      ...appShellNested,
+      { source: '/:path*', headers: securityHeaders }
+    ];
   }
 };
 

@@ -6,6 +6,9 @@ dist
 .env
 .env.local
 .env.*.local
+frontend/.env.build.meta
+frontend/.env.production.local
+frontend/public/build-id.txt
 .DS_Store
 coverage
 .npm-cache

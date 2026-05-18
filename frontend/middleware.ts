@@ -1,6 +1,23 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 
+const APP_BUILD_ID = process.env.NEXT_PUBLIC_APP_BUILD_ID || process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 12) || 'unknown';
+
+const NO_STORE_HEADERS: [string, string][] = [
+  ['Cache-Control', 'private, no-cache, no-store, max-age=0, must-revalidate'],
+  ['Pragma', 'no-cache'],
+  ['CDN-Cache-Control', 'no-store'],
+  ['Vercel-CDN-Cache-Control', 'no-store'],
+  ['X-HAMS-Build', APP_BUILD_ID]
+];
+
+function applyNoStoreHeaders(response: NextResponse): NextResponse {
+  for (const [key, value] of NO_STORE_HEADERS) {
+    response.headers.set(key, value);
+  }
+  return response;
+}
+
 /** Must match `SESSION_COOKIE_NAME` in `lib/auth-session.ts` (middleware cannot import client helpers). */
 const SESSION_COOKIE_NAME = 'hams_token';
 
@@ -80,7 +97,7 @@ export function middleware(request: NextRequest) {
       const url = request.nextUrl.clone();
       url.pathname = dest;
       url.search = '';
-      return NextResponse.redirect(url);
+      return applyNoStoreHeaders(NextResponse.redirect(url));
     }
     return NextResponse.next();
   }
@@ -92,7 +109,7 @@ export function middleware(request: NextRequest) {
     return NextResponse.redirect(login);
   }
 
-  return NextResponse.next();
+  return applyNoStoreHeaders(NextResponse.next());
 }
 
 export const config = {

@@ -1,6 +1,9 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "nextjs",
-  "installCommand": "npm install",
-  "buildCommand": "npm run build"
+  "installCommand": "npm ci --prefer-offline || npm install",
+  "buildCommand": "node scripts/generate-build-meta.mjs && node scripts/vercel-preflight.mjs && rm -rf .next && next build",
+  "env": {
+    "HAMS_NAV_CONFIG_VERSION": "2"
+  }
 }

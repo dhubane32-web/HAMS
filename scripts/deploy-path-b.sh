@@ -34,7 +34,12 @@ printf '%s' 'true' | npx --yes vercel@41.4.0 env add NEXT_PUBLIC_USE_API_PROXY p
   printf '%s' 'true' | npx --yes vercel@41.4.0 env add NEXT_PUBLIC_USE_API_PROXY production --token "$VERCEL_TOKEN" --force
 printf '%s' '/api' | npx --yes vercel@41.4.0 env add NEXT_PUBLIC_API_URL production --token "$VERCEL_TOKEN" 2>/dev/null || true
 printf '%s' 'https://hams-frontend.vercel.app' | npx --yes vercel@41.4.0 env add NEXT_PUBLIC_SITE_URL production --token "$VERCEL_TOKEN" 2>/dev/null || true
-npx --yes vercel@41.4.0 --prod --force --token "$VERCEL_TOKEN"
+export VERCEL_FORCE_NO_BUILD_CACHE=1
+export HAMS_NAV_CONFIG_VERSION="${HAMS_NAV_CONFIG_VERSION:-2}"
+npx --yes vercel@41.4.0 --prod --force --token "$VERCEL_TOKEN" \
+  --env VERCEL_FORCE_NO_BUILD_CACHE=1 \
+  --env HAMS_NAV_CONFIG_VERSION="$HAMS_NAV_CONFIG_VERSION"
+bash "$ROOT/scripts/verify-production-nav-labels.sh"
 
 echo ">>> Verify Vercel proxy"
 API_BASE="https://hams-frontend.vercel.app" bash "$ROOT/scripts/verify-production-api.sh"

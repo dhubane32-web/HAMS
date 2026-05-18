@@ -23,6 +23,7 @@ import {
   Users,
   Wallet
 } from 'lucide-react';
+import { BRAND } from '@/lib/brand';
 import {
   Bar,
   BarChart,
@@ -41,9 +42,7 @@ import type { UserRole } from '@/lib/roles';
 import { roleDisplayName } from '@/lib/roles';
 import { erpModuleTilesForRole } from '@/lib/dashboard-modules';
 import { clearClientSession, hydrateSessionFromCookie } from '@/lib/auth-session';
-import { getPublicApiBaseUrl } from '@/lib/api-base';
-
-const API_BASE_URL = getPublicApiBaseUrl();
+import { apiFetchJson } from '@/lib/api-client';
 
 const MIX_COLORS = ['#0047AB', '#0EA5E9', '#16A34A', '#F59E0B', '#8B5CF6', '#DB2777'];
 
@@ -249,19 +248,11 @@ export default function DashboardPage() {
     setUserRole(role);
     setLoadError('');
     try {
-      const res = await fetch(`${API_BASE_URL}/api/dashboard/summary`, {
-        headers: { Authorization: `Bearer ${token}` }
+      const data = await apiFetchJson<Summary>('/api/dashboard/summary', {
+        headers: { Authorization: `Bearer ${token}` },
+        endpointTag: 'dashboard.summary'
       });
-      if (res.status === 401) {
-        clearClientSession();
-        router.replace('/login');
-        return;
-      }
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error((body as { message?: string }).message || 'Dashboard unavailable.');
-      }
-      setSummary((await res.json()) as Summary);
+      setSummary(data);
     } catch (e) {
       setLoadError(e instanceof Error ? e.message : 'Failed to load dashboard.');
     }
@@ -336,7 +327,7 @@ export default function DashboardPage() {
         {/* Header */}
         <header className="mb-6 flex flex-col gap-4 border-b border-slate-200/80 pb-6 sm:flex-row sm:items-end sm:justify-between">
           <div>
-            <p className="text-[0.65rem] font-bold uppercase tracking-[0.2em] text-hawana-blue">Hawana Airways</p>
+            <p className="text-[0.65rem] font-bold uppercase tracking-[0.2em] text-hawana-blue">{BRAND.companyName}</p>
             <h1 className="mt-1 text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">Executive command center</h1>
             <p className="mt-1 max-w-2xl text-sm text-slate-600">
               Live operational, commercial, and financial snapshot for <strong>{roleTitle}</strong>. Data sourced from
@@ -422,13 +413,13 @@ export default function DashboardPage() {
                 <div>
                   <h2 className="flex items-center gap-2 text-lg font-bold text-slate-900">
                     <Radar className="h-5 w-5 text-hawana-blue" aria-hidden />
-                    Flight operations
+                    Flight Operations
                   </h2>
                   <p className="text-sm text-slate-500">Departures, arrivals, punctuality, and fleet posture (today).</p>
                 </div>
                 {canOps && (
                   <Link href="/operations" className="text-sm font-semibold text-hawana-blue hover:underline">
-                    Operations control →
+                    Flight Operations →
                   </Link>
                 )}
               </div>

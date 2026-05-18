@@ -3,11 +3,9 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import toast from 'react-hot-toast';
-import { getPublicApiBaseUrl } from '@/lib/api-base';
+import { apiFetchJson } from '@/lib/api-client';
 import './operations-erp.css';
 import { OperationsOccHub } from './OperationsOccHub';
-
-const API_BASE_URL = getPublicApiBaseUrl();
 
 const FLIGHT_STATUSES = [
   'SCHEDULED',
@@ -313,27 +311,15 @@ export default function OperationsPage() {
   const fetchJson = useCallback(async <T = unknown>(path: string, init?: RequestInit): Promise<T> => {
     const token = getToken();
     if (!token) throw new Error('Please login first from /login.');
-    const response = await fetch(`${API_BASE_URL}${path}`, {
+    return apiFetchJson<T>(path, {
       ...init,
       headers: {
         ...(init?.body ? { 'Content-Type': 'application/json' } : {}),
         ...(init?.headers || {}),
         Authorization: `Bearer ${token}`
-      }
+      },
+      endpointTag: `operations:${path}`
     });
-    const text = await response.text();
-    let body: { message?: string } & Partial<T> = {};
-    if (text) {
-      try {
-        body = JSON.parse(text) as { message?: string } & T;
-      } catch {
-        body = {};
-      }
-    }
-    if (!response.ok) {
-      throw new Error(body.message || 'Request failed.');
-    }
-    return body as T;
   }, []);
 
   const loadCatalog = useCallback(async () => {
@@ -1048,7 +1034,7 @@ export default function OperationsPage() {
   return (
     <main className="module-page ops-shell">
       <section className="module-card">
-        <h1>Flight &amp; Operations</h1>
+        <h1>Flight Operations</h1>
         <p style={{ marginTop: 0, color: '#64748b', maxWidth: '52rem' }}>
           Airline-style OCC: status workflow, dispatch release checklist, load snapshot, crew roles with overlap protection,
           delay capture with revised times, operational alerts, and audit timeline per flight.

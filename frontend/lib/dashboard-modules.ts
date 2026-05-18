@@ -31,14 +31,14 @@ const CHECKIN: ErpModuleTile = {
 
 const FLIGHT_OPS: ErpModuleTile = {
   id: 'flight-ops',
-  title: 'Flight & Operations',
+  title: 'Flight Operations',
   description: 'Dispatch, delays, aircraft assignment, and day-of-operations control.',
   href: '/operations'
 };
 
 const MAINTENANCE: ErpModuleTile = {
   id: 'maintenance',
-  title: 'Maintenance & Aircraft',
+  title: 'Aircraft Maintenance',
   description: 'Defects, inspections, release to service, and technical history.',
   href: '/maintenance'
 };

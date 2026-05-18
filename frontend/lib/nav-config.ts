@@ -66,13 +66,13 @@ export const navItems: NavItem[] = [
   },
   {
     href: '/operations',
-    label: 'Flight & Operations',
+    label: 'Flight Operations',
     icon: SlidersHorizontal,
     roles: OPS
   },
   {
     href: '/maintenance',
-    label: 'Maintenance & Aircraft',
+    label: 'Aircraft Maintenance',
     icon: Wrench,
     roles: MAINT
   },

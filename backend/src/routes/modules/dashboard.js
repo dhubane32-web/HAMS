@@ -6,6 +6,24 @@ import { dateRangeToDepartureWindow, queryLoadFactorSnapshot } from '../../servi
 
 const router = express.Router();
 
+function emptyDashboardPayload(role, date) {
+  return {
+    role,
+    date,
+    executive: null,
+    kpis: [],
+    quickLinks: quickLinksForRole(role),
+    alerts: [],
+    todaysFlights: [],
+    myFlights: [],
+    operationalSummary: { byStatus: {}, flightsCount: 0 },
+    checkinStatus: { passengersOnTodayFlights: 0, checkedInOnTodayFlights: 0, outstanding: 0 },
+    crewOverview: [],
+    bookingRevenue: { paymentsToday: 0, refundsToday: 0, bookingsToday: 0, ticketsToday: 0, series7d: [], paymentMix7d: [] },
+    financeSnapshot: { revenueMonth: 0, refundsMonth: 0, netMonth: 0, holdsOutstanding: 0 }
+  };
+}
+
 /** Safe row extractors for Promise.allSettled — avoids 500 when one table/column is missing. */
 function rowCountFromSettled(settled, idx, scope) {
   const r = settled[idx];
@@ -43,7 +61,7 @@ function quickLinksForRole(role) {
     { label: 'PNR & tickets', href: '/bookings' },
     { label: 'Check-in desk', href: '/checkin' },
     { label: 'Flight schedule', href: '/flights' },
-    { label: 'Operations control', href: '/operations' },
+    { label: 'Flight Operations', href: '/operations' },
     { label: 'Crew roster', href: '/crew' },
     { label: 'Payments', href: '/finance' },
     { label: 'Record expense', href: '/add-expense' },
@@ -55,7 +73,7 @@ function quickLinksForRole(role) {
     { label: 'Master data', href: '/settings' },
     { label: 'System settings', href: '/system-settings' },
     { label: 'Administration', href: '/system-administration' },
-    { label: 'Aircraft & MX', href: '/maintenance' },
+    { label: 'Aircraft Maintenance', href: '/maintenance' },
     { label: 'User admin', href: '/admin' },
     { label: 'Workspace settings', href: '/workspace-settings' }
   ];
@@ -756,7 +774,8 @@ router.get('/summary', requireAuth, async (req, res) => {
 
     return res.json(payload);
   } catch (error) {
-    return res.status(500).json({ message: 'Failed to load dashboard summary.', error: error.message });
+    console.warn('[dashboard/summary] returning safe defaults:', error?.message || error);
+    return res.status(200).json(emptyDashboardPayload(role, today));
   }
 });
 
