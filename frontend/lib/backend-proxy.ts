@@ -20,6 +20,27 @@ export function backendNotConfiguredResponse() {
   );
 }
 
+/** Known misconfiguration: api.* DNS is not the HAMS API host. */
+function misconfiguredBackendResponse(base: string) {
+  try {
+    const host = new URL(base).hostname.toLowerCase();
+    if (host === 'api.hawanaairways.com') {
+      return Response.json(
+        {
+          error: 'Invalid backend URL on Vercel',
+          hint:
+            'api.hawanaairways.com does not resolve to the HAMS API. In Vercel Production, set HAMS_BACKEND_INTERNAL_URL to your Railway URL (https://YOUR-SERVICE.up.railway.app), set NEXT_PUBLIC_API_URL=/api, remove any api.hawanaairways.com values, then redeploy.',
+          configured: base
+        },
+        { status: 503 }
+      );
+    }
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+
 /** Proxy a request to the HAMS backend (Path B). */
 export async function proxyToBackend(
   req: NextRequest,
@@ -27,6 +48,8 @@ export async function proxyToBackend(
 ): Promise<Response> {
   const base = getBackendInternalUrl();
   if (!base) return backendNotConfiguredResponse();
+  const misconfigured = misconfiguredBackendResponse(base);
+  if (misconfigured) return misconfigured;
 
   const search = req.nextUrl.search || '';
   const url = `${base}${backendPath.startsWith('/') ? backendPath : `/${backendPath}`}${search}`;
