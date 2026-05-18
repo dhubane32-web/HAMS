@@ -7,7 +7,7 @@ set -euo pipefail
 
 API_BASE="${API_BASE:-https://api.hawanaairways.com}"
 ORIGIN="${ORIGIN:-https://hams-frontend.vercel.app}"
-EMAIL="${EMAIL:-admin@hawanaairways.com}"
+EMAIL="${EMAIL:-${HAMS_LOGIN_EMAIL:-abdifatah@hawanaairways.com}}"
 PASSWORD="${PASSWORD:-Hawana@2026}"
 
 API_BASE="${API_BASE%/}"

@@ -10,19 +10,28 @@ import bcrypt from 'bcrypt';
 
 const { Pool } = pg;
 
-const ADMIN_EMAIL = 'admin@hawanaairways.com';
+const DEFAULT_EMAIL = 'admin@hawanaairways.com';
 const DEFAULT_PASSWORD = 'Hawana@2026';
 
-function parsePasswordArg() {
-  const idx = process.argv.indexOf('--password');
+function parseArg(flag) {
+  const idx = process.argv.indexOf(flag);
   if (idx >= 0 && process.argv[idx + 1]) return process.argv[idx + 1];
-  return process.env.HAMS_ADMIN_PASSWORD || DEFAULT_PASSWORD;
+  return null;
+}
+
+function parsePasswordArg() {
+  return parseArg('--password') || process.env.HAMS_ADMIN_PASSWORD || DEFAULT_PASSWORD;
+}
+
+function parseEmailArg() {
+  return parseArg('--email') || process.env.HAMS_ADMIN_EMAIL || DEFAULT_EMAIL;
 }
 
 const connectionString =
   process.env.DATABASE_URL || 'postgresql://postgres:postgres@127.0.0.1:5432/hams';
 
 async function main() {
+  const adminEmail = parseEmailArg().toLowerCase().trim();
   const password = parsePasswordArg();
   if (password.length < 10) {
     console.error('Password must be at least 10 characters.');
@@ -47,12 +56,12 @@ async function main() {
          locked_until = NULL,
          updated_at = NOW()
        RETURNING id, email, role`,
-      ['Hawana Airways Admin', ADMIN_EMAIL, hash]
+      ['Hawana Airways Admin', adminEmail, hash]
     );
 
     const row = upsert.rows[0];
     console.log(`OK: ${row.email} (${row.role}) password updated, lockout cleared.`);
-    console.log(`Email: ${ADMIN_EMAIL}`);
+    console.log(`Email: ${adminEmail}`);
     if (process.env.NODE_ENV !== 'production') {
       console.log(`Password: ${password}`);
     } else {
