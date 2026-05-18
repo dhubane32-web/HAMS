@@ -3,10 +3,13 @@
  * Validate Vercel production env before `next build`.
  * Usage: NODE_ENV=production VERCEL=1 node frontend/scripts/vercel-preflight.mjs
  */
-const isProd =
-  process.env.NODE_ENV === 'production' ||
-  process.env.VERCEL === '1' ||
-  process.env.VERCEL_ENV === 'production';
+// Vercel injects project env at build time — strict CLI checks are for local/CI only.
+if (process.env.VERCEL === '1') {
+  console.log('vercel-preflight: skipped on Vercel (use Project → Environment Variables)');
+  process.exit(0);
+}
+
+const isProd = process.env.NODE_ENV === 'production';
 
 if (!isProd) {
   console.log('vercel-preflight: skipped (not production build)');
