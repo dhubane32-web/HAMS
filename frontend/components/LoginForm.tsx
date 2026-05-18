@@ -81,8 +81,8 @@ function validateClient(email: string, password: string): { email?: string; pass
 
 export default function LoginForm() {
   const router = useRouter();
-  const [email, setEmail] = useState('admin@hawanaairways.com');
-  const [password, setPassword] = useState('Admin12345!');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [rememberEmail, setRememberEmail] = useState(true);
@@ -290,7 +290,8 @@ export default function LoginForm() {
 
       finishLoginSuccess(result as LoginSuccess, trimmedEmail);
     } catch {
-      const msg = 'Unable to reach the authentication service. Check your connection and API URL.';
+      const apiHint = API_BASE_URL ? ` API: ${API_BASE_URL}` : '';
+      const msg = `Unable to reach the authentication service. Check your connection and API URL.${apiHint}`;
       setFormError(msg);
       toast.error('Unable to connect to backend service.');
     } finally {
@@ -315,6 +316,7 @@ export default function LoginForm() {
       </div>
 
       <form
+        method="post"
         onSubmit={handleSubmit}
         className="rounded-2xl border border-slate-200/90 bg-white/95 p-6 shadow-card backdrop-blur-sm sm:p-8"
         noValidate
@@ -590,7 +592,12 @@ export default function LoginForm() {
         </p>
       </form>
 
-      <p className="mt-6 text-center text-xs text-slate-400">© {new Date().getFullYear()} Hawana Airways. All rights reserved.</p>
+      <p className="mt-6 text-center text-xs text-slate-400">
+        <Link href="/" className="text-hawana-blue hover:underline">
+          Public site
+        </Link>
+        <span className="mx-2 text-slate-300">·</span>© {new Date().getFullYear()} Hawana Airways. All rights reserved.
+      </p>
     </div>
   );
 }

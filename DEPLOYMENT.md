@@ -13,7 +13,7 @@ This repository contains:
 
 **Hawana `hams` + `api` subdomains only (cPanel / CNAME values / NXDOMAIN):** **`docs/DNS_HAMS_AND_API.md`** · Verify: **`bash scripts/verify-hawana-production-dns.sh`**
 
-**Vercel `404: DEPLOYMENT_NOT_FOUND` on `hams.hawanaairways.com`:** **`docs/VERCEL_HAMS_DOMAIN.md`** (domain must be on the HAMS project with **Root Directory** `frontend`).
+**Vercel `404: DEPLOYMENT_NOT_FOUND` on `hams.hawanaairways.com`:** **`docs/VERCEL_DEPLOYMENT_NOT_FOUND.md`** (fresh import + domain) · **`docs/VERCEL_HAMS_DOMAIN.md`** (domain on HAMS project, **Root Directory** `frontend`).
 
 1. Point **A / AAAA** (or **CNAME** for PaaS) for your apex domain (e.g. `hawana.aero`) at your frontend host’s target (e.g. Vercel apex, VPS IP).
 2. Add **`www`** as either a duplicate record or **CNAME** → apex. The Next.js config redirects `www` → apex when **`NEXT_PUBLIC_CANONICAL_HOST`** matches your apex hostname at **build time**.

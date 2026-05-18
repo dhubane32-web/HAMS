@@ -32,38 +32,29 @@ import reportsAnalyticsRoutes from './routes/modules/reports-analytics.js';
 import { startBackupScheduler } from './services/backupScheduler.js';
 
 const app = express();
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 5013;
 
 const isProd = process.env.NODE_ENV === 'production';
 
-function parseOrigins(value) {
-  if (!value) return [];
-  return value
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean);
-}
+import {
+  parseOrigins,
+  isBrowserOriginAllowed
+} from './lib/corsOrigins.js';
 
 const configuredOrigins = parseOrigins(process.env.FRONTEND_URL);
+const extraOrigins = parseOrigins(process.env.HAMS_EXTRA_CORS_ORIGINS);
 
 attachSecurityHeaders(app);
 
 app.use(
   cors({
     origin(origin, callback) {
-      if (!origin) {
-        callback(null, true);
-        return;
-      }
-      if (configuredOrigins.includes(origin)) {
-        callback(null, true);
-        return;
-      }
-      if (!isProd && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
-        callback(null, true);
-        return;
-      }
-      callback(null, false);
+      const ok = isBrowserOriginAllowed(origin, {
+        configuredOrigins,
+        extraOrigins,
+        isProd
+      });
+      callback(null, ok);
     },
     credentials: true
   })
@@ -77,10 +68,9 @@ app.use(sanitizeBody);
 
 async function healthHandler(_req, res) {
   try {
-    await pool.query('SELECT 1');
-    res.status(200).json({ status: 'ok', service: 'hams-backend' });
+    res.status(200).json({ ok: true, service: 'HAMS backend' });
   } catch (error) {
-    res.status(500).json({ status: 'error', message: isProd ? 'unhealthy' : error.message });
+    res.status(500).json({ ok: false, service: 'HAMS backend', message: isProd ? 'unhealthy' : error.message });
   }
 }
 
