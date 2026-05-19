@@ -228,7 +228,7 @@ export default function MaintenancePage() {
               >
                 <strong>{a.tail_number}</strong>
                 <div>{a.model}</div>
-                <motion.div style={{ marginTop: 4, fontWeight: 700 }}>{tone.label}</div>
+                <div style={{ marginTop: 4, fontWeight: 700 }}>{tone.label}</div>
               </div>
             );
           })}
