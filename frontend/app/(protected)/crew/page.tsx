@@ -2,9 +2,7 @@
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
-import { getPublicApiBaseUrl } from '@/lib/api-base';
-
-const API_BASE_URL = getPublicApiBaseUrl();
+import { apiFetchJson } from '@/lib/api-client';
 
 type CrewListRow = {
   id: string;
@@ -165,29 +163,15 @@ export default function CrewPage() {
   const fetchJson = useCallback(async <T,>(path: string, init?: RequestInit): Promise<T> => {
     const token = getToken();
     if (!token) throw new Error('Please login first from /login.');
-    const response = await fetch(`${API_BASE_URL}${path}`, {
+    return apiFetchJson<T>(path, {
       ...init,
       headers: {
         ...(init?.body ? { 'Content-Type': 'application/json' } : {}),
         ...(init?.headers || {}),
         Authorization: `Bearer ${token}`
-      }
+      },
+      endpointTag: `crew:${path}`
     });
-    const text = await response.text();
-    let body: { message?: string } & Partial<T> = {};
-    if (text) {
-      try {
-        body = JSON.parse(text) as { message?: string } & T;
-      } catch {
-        body = {};
-      }
-    }
-    if (!response.ok) {
-      const err = new Error(body.message || 'Request failed.') as Error & { status?: number };
-      err.status = response.status;
-      throw err;
-    }
-    return body as T;
   }, []);
 
   const loadCrewList = useCallback(async () => {

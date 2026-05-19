@@ -15,9 +15,7 @@ import {
 } from 'recharts';
 import toast from 'react-hot-toast';
 import type { UserRole } from '@/lib/roles';
-import { getPublicApiBaseUrl } from '@/lib/api-base';
-
-const API_BASE_URL = getPublicApiBaseUrl();
+import { apiFetch, apiFetchJson } from '@/lib/api-client';
 
 type ReportDef = {
   id: string;
@@ -174,22 +172,10 @@ export default function ReportsAnalyticsModule() {
   const fetchJson = useCallback(async <T,>(path: string): Promise<T> => {
     const token = getToken();
     if (!token) throw new Error('Please login first.');
-    const res = await fetch(`${API_BASE_URL}${path}`, { headers: { Authorization: `Bearer ${token}` } });
-    const text = await res.text();
-    let body: { message?: string } & Partial<T> = {};
-    if (text) {
-      try {
-        body = JSON.parse(text) as { message?: string } & T;
-      } catch {
-        body = {};
-      }
-    }
-    if (!res.ok) {
-      const err = new Error(body.message || 'Request failed.') as Error & { status?: number };
-      err.status = res.status;
-      throw err;
-    }
-    return body as T;
+    return apiFetchJson<T>(path, {
+      headers: { Authorization: `Bearer ${token}` },
+      endpointTag: `reports:${path}`
+    });
   }, []);
 
   useEffect(() => {
@@ -289,7 +275,10 @@ export default function ReportsAnalyticsModule() {
     const token = getToken();
     if (!token) return toast.error('Login required.');
     const qs = `${buildQuery()}&format=csv`;
-    const res = await fetch(`${API_BASE_URL}${activeDef.path}?${qs}`, { headers: { Authorization: `Bearer ${token}` } });
+    const res = await apiFetch(`${activeDef.path}?${qs}`, {
+      headers: { Authorization: `Bearer ${token}` },
+      endpointTag: `reports:export:${activeDef.id}`
+    });
     if (!res.ok) {
       toast.error('CSV export failed.');
       return;

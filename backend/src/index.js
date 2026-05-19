@@ -30,6 +30,8 @@ import { salesCommercialRouter } from './routes/modules/salesCommercialExtras.js
 import customerServiceRoutes from './routes/modules/customer-service.js';
 import reportsAnalyticsRoutes from './routes/modules/reports-analytics.js';
 import commercialRoutes from './routes/modules/commercial.js';
+import enterpriseOpsRoutes from './routes/modules/enterprise-ops.js';
+import { ensureOccEtaColumns } from './lib/occFlightColumns.js';
 import { startBackupScheduler } from './services/backupScheduler.js';
 import healthRouter from './routes/health.js';
 import { occPublicRouter } from './routes/modules/occ.js';
@@ -110,6 +112,7 @@ app.use('/api/checkin', checkinRoutes);
 app.use('/api/boarding', boardingRoutes);
 app.use('/api/finance', financeRoutes);
 app.use('/api/operations', operationsRoutes);
+app.use('/api/enterprise-ops', enterpriseOpsRoutes);
 app.use('/api/maintenance', maintenanceRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/master-data', masterDataRoutes);
@@ -156,6 +159,12 @@ async function start() {
   // Listen before DB is ready so Railway /health can pass during Postgres cold start.
   waitForDatabase()
     .then(async () => {
+      try {
+        await ensureOccEtaColumns(pool);
+        logInfo('OCC flight ETA columns verified.');
+      } catch (occErr) {
+        logError('OCC column bootstrap warn', occErr);
+      }
       const integrity = await runDbIntegrityChecks();
       if (!integrity.ok) {
         logError('DB integrity check reported issues', new Error('integrity warnings'));

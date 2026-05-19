@@ -36,6 +36,7 @@ export function trustedOriginMutations(req, res, next) {
 
   const path = req.path || req.url || '';
   if (
+    path.startsWith('/health') ||
     path.startsWith('/api/health') ||
     path.startsWith('/api/auth/login') ||
     path.startsWith('/api/auth/login/2fa') ||

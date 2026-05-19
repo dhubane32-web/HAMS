@@ -10,8 +10,8 @@ COPY . .
 
 ENV NODE_ENV=production
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
-  CMD wget -qO- "http://127.0.0.1:${PORT:-5013}/health" || exit 1
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=5 \
+  CMD sh -c 'wget -qO- "http://127.0.0.1:${PORT:-5013}/health/live" || exit 1'
 
 EXPOSE 5013
 

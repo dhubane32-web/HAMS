@@ -1,4 +1,6 @@
-import { cleanupBackupsByRetention, runFullBackup } from './backupService.js';
+import { cleanupBackupsByRetention, runFullBackup, simulateRestoreFromBackupLog, listBackupLogs } from './backupService.js';
+import { sendOperationalAlert } from './alertService.js';
+import { logError, logInfo } from '../lib/safeLog.js';
 
 let timer = null;
 const lastRuns = { daily: '', weekly: '', monthly: '' };
@@ -82,7 +84,12 @@ export function startBackupScheduler() {
         }
       }
     } catch (error) {
-      console.error('[backup] scheduled backup failed:', error?.message || error);
+      logError('[backup] scheduled backup failed', error);
+      await sendOperationalAlert({
+        severity: 'critical',
+        title: 'Scheduled backup failed',
+        message: error?.message || 'scheduler error'
+      }).catch(() => {});
     } finally {
       timer = setTimeout(loop, 60 * 1000);
       if (typeof timer.unref === 'function') timer.unref();
@@ -97,11 +104,47 @@ export function startBackupScheduler() {
   );
   timer = setTimeout(loop, Math.max(1000, firstWait));
   if (typeof timer.unref === 'function') timer.unref();
-  console.log(
+  logInfo(
     `[backup] scheduler active daily=${String(dailyHourUtc).padStart(2, '0')}:${String(dailyMinuteUtc).padStart(2, '0')} ` +
       `weekly(sun)=${String(weeklyHourUtc).padStart(2, '0')}:${String(weeklyMinuteUtc).padStart(2, '0')} ` +
       `monthly(day1)=${String(monthlyHourUtc).padStart(2, '0')}:${String(monthlyMinuteUtc).padStart(2, '0')} UTC`
   );
+
+  // Weekly restore simulation on latest DB backup (Sundays 03:30 UTC).
+  scheduleWeeklyVerification();
+}
+
+let verifyTimer = null;
+
+function scheduleWeeklyVerification() {
+  const runVerify = async () => {
+    const now = new Date();
+    if (now.getUTCDay() !== 0 || now.getUTCHours() !== 3 || now.getUTCMinutes() !== 30) {
+      verifyTimer = setTimeout(runVerify, 60 * 1000);
+      if (typeof verifyTimer.unref === 'function') verifyTimer.unref();
+      return;
+    }
+    try {
+      const { rows } = await listBackupLogs({ limit: 20, offset: 0 });
+      const latestDb = rows.find((r) => r.backup_type === 'database' && r.status === 'success');
+      if (latestDb) {
+        await simulateRestoreFromBackupLog({ id: latestDb.id });
+        logInfo('[backup] weekly verification passed', { id: latestDb.id });
+      }
+    } catch (error) {
+      logError('[backup] weekly verification failed', error);
+      await sendOperationalAlert({
+        severity: 'warning',
+        title: 'Weekly backup verification failed',
+        message: error?.message || 'verification error'
+      }).catch(() => {});
+    } finally {
+      verifyTimer = setTimeout(runVerify, 60 * 1000);
+      if (typeof verifyTimer.unref === 'function') verifyTimer.unref();
+    }
+  };
+  verifyTimer = setTimeout(runVerify, 60 * 1000);
+  if (typeof verifyTimer.unref === 'function') verifyTimer.unref();
 }
 
 export function stopBackupScheduler() {

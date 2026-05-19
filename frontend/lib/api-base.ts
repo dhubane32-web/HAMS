@@ -1,4 +1,4 @@
-import { isDeadApiHost, sanitizeBackendUrl } from '@/lib/dead-api-host';
+import { isDeadApiHost, isLocalhostApiUrl, sanitizeBackendUrl } from '@/lib/dead-api-host';
 
 /**
  * Public API origin for browser fetches (no trailing slash).
@@ -18,7 +18,10 @@ export function getPublicApiBaseUrl(): string {
   }
 
   const s = sanitizeBackendUrl(apiUrl);
-  if (s && s !== '/api' && /^https?:\/\//i.test(s)) return s;
+  if (s && s !== '/api' && /^https?:\/\//i.test(s)) {
+    if (process.env.NODE_ENV === 'production' && isLocalhostApiUrl(s)) return '';
+    return s;
+  }
 
   if (process.env.NODE_ENV === 'production') return '';
   return 'http://localhost:5013';

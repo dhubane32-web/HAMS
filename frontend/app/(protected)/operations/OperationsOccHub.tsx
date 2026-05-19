@@ -12,6 +12,29 @@ function getToken() {
   return typeof window !== 'undefined' ? localStorage.getItem('hams_token') : null;
 }
 
+function formatCountdown(targetIso: string) {
+  const ms = new Date(targetIso).getTime() - Date.now();
+  if (ms <= 0) return 'now';
+  const totalMin = Math.floor(ms / 60_000);
+  const h = Math.floor(totalMin / 60);
+  const m = totalMin % 60;
+  return h > 0 ? `${h}h ${m}m` : `${m}m`;
+}
+
+function formatElapsed(sinceIso: string) {
+  const ms = Date.now() - new Date(sinceIso).getTime();
+  if (ms < 0) return '—';
+  const totalMin = Math.floor(ms / 60_000);
+  const h = Math.floor(totalMin / 60);
+  const m = totalMin % 60;
+  return h > 0 ? `${h}h ${m}m` : `${m}m`;
+}
+
+function isDelayedFlight(f: DashboardFlight) {
+  const s = (f.live?.status || f.status || '').toUpperCase();
+  return s === 'DELAYED';
+}
+
 type OccLive = {
   phase: string;
   status: string;
@@ -57,6 +80,10 @@ export function OperationsOccHub() {
   const [dutyLimits, setDutyLimits] = useState<Record<string, unknown> | null>(null);
   const [dutyLimitsError, setDutyLimitsError] = useState<string | null>(null);
   const [dashError, setDashError] = useState<string | null>(null);
+  const [schemaNote, setSchemaNote] = useState<string | null>(null);
+  const [lastBoardSync, setLastBoardSync] = useState<string | null>(null);
+  const [occDark, setOccDark] = useState(false);
+  const [autoRefresh, setAutoRefresh] = useState(true);
   const [liveRow, setLiveRow] = useState<{ flight: Record<string, unknown>; live: OccLive } | null>(null);
   const [rotation, setRotation] = useState<{ id: string; flight_number: string; departure_airport: string; arrival_airport: string; departure_time: string; status: string }[]>([]);
   const [timeline, setTimeline] = useState<OccEvent[]>([]);
@@ -117,9 +144,13 @@ export function OperationsOccHub() {
       const d = await fetchJson<{
         flights: DashboardFlight[];
         enterprise?: { conflictCount: number; openAlerts: number; dispatchPending: number } | null;
+        schemaMode?: string;
+        etaNote?: string | null;
       }>(`/api/operations/occ/dashboard?date=${encodeURIComponent(occDate)}`);
       setDashboardFlights(d.flights || []);
       setEnterprisePulse(d.enterprise ?? null);
+      setSchemaNote(d.etaNote || (d.schemaMode === 'compat' ? 'ETA from scheduled arrival until tracking columns are migrated.' : null));
+      setLastBoardSync(new Date().toISOString());
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Dashboard failed';
       setDashError(msg);
@@ -163,6 +194,22 @@ export function OperationsOccHub() {
   useEffect(() => {
     void loadDashboard();
   }, [loadDashboard]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const saved = localStorage.getItem('hams_occ_dark');
+    if (saved === '1') setOccDark(true);
+  }, []);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') localStorage.setItem('hams_occ_dark', occDark ? '1' : '0');
+  }, [occDark]);
+
+  useEffect(() => {
+    if (!autoRefresh) return;
+    const t = window.setInterval(() => void loadDashboard(), 30_000);
+    return () => window.clearInterval(t);
+  }, [autoRefresh, loadDashboard]);
 
   const loadFlightDetail = useCallback(
     async (fid: string) => {
@@ -309,8 +356,10 @@ export function OperationsOccHub() {
     return 'ops-badge ops-badge--scheduled';
   };
 
+  const openAlertCount = enterprisePulse?.openAlerts ?? 0;
+
   return (
-    <div className="occ-hub">
+    <div className={occDark ? 'occ-hub occ-hub--dark' : 'occ-hub'}>
       <section className="module-card">
         <h2>OCC Control Center</h2>
         <p style={{ marginTop: 0, color: '#64748b', fontSize: '0.88rem', maxWidth: '48rem' }}>
@@ -337,7 +386,12 @@ export function OperationsOccHub() {
             </button>
           </div>
         ) : null}
-        <div className="ops-filters" style={{ marginBottom: '0.75rem' }}>
+        {schemaNote ? (
+          <p className="occ-schema-note" role="status">
+            {schemaNote}
+          </p>
+        ) : null}
+        <div className="ops-filters occ-toolbar" style={{ marginBottom: '0.75rem' }}>
           <label>
             UTC ops date
             <input type="date" value={occDate} onChange={(e) => setOccDate(e.target.value)} />
@@ -345,6 +399,24 @@ export function OperationsOccHub() {
           <button type="button" disabled={dashLoading} onClick={() => void loadDashboard()}>
             {dashLoading ? 'Loading…' : 'Refresh board'}
           </button>
+          <label className="occ-toggle">
+            <input type="checkbox" checked={autoRefresh} onChange={(e) => setAutoRefresh(e.target.checked)} />
+            Live refresh (30s)
+          </label>
+          <button type="button" className="secondary" onClick={() => setOccDark((d) => !d)}>
+            {occDark ? 'Light mode' : 'Dark OCC'}
+          </button>
+          {lastBoardSync ? (
+            <span className="occ-live-pulse" title="Last board sync">
+              <span className="occ-live-dot" aria-hidden />
+              {new Date(lastBoardSync).toLocaleTimeString()}
+            </span>
+          ) : null}
+          {openAlertCount > 0 ? (
+            <span className="occ-alert-badge" role="status">
+              {openAlertCount} alert{openAlertCount === 1 ? '' : 's'}
+            </span>
+          ) : null}
           <Link href="/checkin" className="secondary" style={{ alignSelf: 'end', fontSize: '0.85rem' }}>
             Check-in / manifest
           </Link>
@@ -376,6 +448,7 @@ export function OperationsOccHub() {
                 <th>Dep (UTC)</th>
                 <th>Phase</th>
                 <th>ETA</th>
+                <th>Timer</th>
                 <th>Tail</th>
                 <th />
               </tr>
@@ -383,14 +456,21 @@ export function OperationsOccHub() {
             <tbody>
               {dashboardFlights.length === 0 && !dashLoading ? (
                 <tr>
-                  <td colSpan={7} style={{ color: '#64748b' }}>
+                  <td colSpan={8} style={{ color: '#64748b' }}>
                     No flights for this date.
                   </td>
                 </tr>
               ) : null}
               {dashboardFlights.map((f) => (
-                <tr key={f.id} style={selectedFlightId === f.id ? { background: 'rgba(59,130,246,0.08)' } : undefined}>
-                  <td style={{ fontWeight: 700 }}>{f.flight_number}</td>
+                <tr
+                  key={f.id}
+                  className={isDelayedFlight(f) ? 'occ-row--delayed' : undefined}
+                  style={selectedFlightId === f.id ? { background: 'rgba(59,130,246,0.08)' } : undefined}
+                >
+                  <td style={{ fontWeight: 700 }}>
+                    {f.flight_number}
+                    {isDelayedFlight(f) ? <span className="ops-badge ops-badge--delayed occ-delay-tag">DELAY</span> : null}
+                  </td>
                   <td>
                     {f.departure_airport}→{f.arrival_airport}
                   </td>
@@ -400,6 +480,13 @@ export function OperationsOccHub() {
                   </td>
                   <td style={{ whiteSpace: 'nowrap', fontSize: '0.8rem' }}>
                     {f.live.eta ? new Date(f.live.eta).toLocaleString() : '—'}
+                  </td>
+                  <td style={{ fontSize: '0.78rem', whiteSpace: 'nowrap' }}>
+                    {f.live.landedAt
+                      ? `GND ${formatElapsed(f.live.landedAt)}`
+                      : f.live.phase === 'GROUND' || f.live.phase === 'PLANNED'
+                        ? `DEP ${formatCountdown(f.departure_time)}`
+                        : '—'}
                   </td>
                   <td>{f.tail_number || '—'}</td>
                   <td>
@@ -476,7 +563,11 @@ export function OperationsOccHub() {
           {detailTab === 'live' && liveRow && (
             <div>
               <p>
-                Status <strong>{liveRow.live.status}</strong> · Phase <strong>{liveRow.live.phase}</strong>
+                Status <strong>{liveRow.live.status}</strong> · Phase{' '}
+                <span className={phaseBadgeClass(liveRow.live.phase)}>{liveRow.live.phase}</span>
+                {liveRow.live.landedAt ? (
+                  <span className="occ-turnaround-chip"> Turnaround {formatElapsed(liveRow.live.landedAt)}</span>
+                ) : null}
               </p>
               <ul style={{ fontSize: '0.85rem', color: '#334155' }}>
                 <li>Off-block: {liveRow.live.departedAt ? new Date(liveRow.live.departedAt).toLocaleString() : '—'}</li>
@@ -491,6 +582,20 @@ export function OperationsOccHub() {
                 </label>
                 <button type="submit">Post ETA to OCC</button>
               </form>
+              {timeline.length > 0 ? (
+                <div className="occ-dispatch-timeline">
+                  <h4 style={{ fontSize: '0.85rem', margin: '0.75rem 0 0.35rem' }}>Dispatch timeline</h4>
+                  <ol>
+                    {timeline.slice(0, 12).map((ev) => (
+                      <li key={ev.id}>
+                        <time>{new Date(ev.created_at).toLocaleTimeString()}</time>
+                        <strong>{ev.event_type}</strong>
+                        <span>{ev.source_system}</span>
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+              ) : null}
             </div>
           )}
 

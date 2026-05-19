@@ -1,5 +1,7 @@
 'use client';
 
+import { BRAND } from '@/lib/brand';
+
 /**
  * Root-level error UI when the root layout fails. Must define its own <html> and <body>.
  */
@@ -26,7 +28,9 @@ export default function GlobalError({
           fontFamily: 'system-ui, -apple-system, Segoe UI, sans-serif'
         }}
       >
-        <h1 style={{ margin: '0 0 0.5rem', fontSize: '1.25rem', fontWeight: 600 }}>HAMS — critical error</h1>
+        <h1 style={{ margin: '0 0 0.5rem', fontSize: '1.25rem', fontWeight: 600 }}>
+          {BRAND.systemName} — critical error
+        </h1>
         <p style={{ margin: '0 0 1.25rem', maxWidth: 520, textAlign: 'center', color: '#94a3b8', fontSize: '0.9rem' }}>
           {error.message || 'The application could not load. Please refresh the page.'}
         </p>

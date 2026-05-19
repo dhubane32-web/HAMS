@@ -16,3 +16,6 @@ var/eticket-pdf-cache
 
 # Local pg_dump outputs (scripts/backup-postgres.sh)
 backups/*.dump
+
+# Encrypted local backup runs (never commit)
+backend/var/backups/

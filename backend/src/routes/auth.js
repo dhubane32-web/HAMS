@@ -10,6 +10,8 @@ import { authLoginLimiter } from '../middleware/apiRateLimits.js';
 import { requireAuth } from '../middleware/auth.js';
 import { isPasswordExpired } from '../lib/passwordExpiry.js';
 import { attachSessionCookie, clearSessionCookie } from '../lib/sessionCookie.js';
+import { BCRYPT_ROUNDS } from '../lib/bcryptConfig.js';
+import { logSystemEvent } from '../services/systemLogService.js';
 
 const router = express.Router();
 const isProd = process.env.NODE_ENV === 'production';
@@ -59,6 +61,13 @@ router.post('/login', authLoginLimiter, async (req, res) => {
         entityId: null,
         metadata: { email: emailNorm, reason: 'USER_NOT_FOUND' },
         req
+      });
+      void logSystemEvent({
+        level: 'warn',
+        category: 'auth',
+        action: 'LOGIN_FAILED',
+        message: emailNorm,
+        metadata: { reason: 'USER_NOT_FOUND' }
       });
       return res.status(401).json({ message: 'Invalid credentials.' });
     }
@@ -134,6 +143,14 @@ router.post('/login', authLoginLimiter, async (req, res) => {
         metadata: { email: emailNorm, reason: 'BAD_PASSWORD', failed_attempts: next },
         req
       });
+      void logSystemEvent({
+        level: 'warn',
+        category: 'auth',
+        action: 'LOGIN_FAILED',
+        message: emailNorm,
+        userId: user.id,
+        metadata: { reason: 'BAD_PASSWORD', failed_attempts: next }
+      });
       return res.status(401).json({ message: 'Invalid credentials.' });
     }
 
@@ -181,6 +198,14 @@ router.post('/login', authLoginLimiter, async (req, res) => {
       metadata: { email: user.email },
       req
     });
+    void logSystemEvent({
+      level: 'info',
+      category: 'auth',
+      action: 'LOGIN_SUCCESS',
+      message: user.email,
+      userId: user.id,
+      metadata: { role: user.role }
+    });
 
     try {
       await pool.query(
@@ -225,7 +250,7 @@ router.post('/change-password', requireAuth, async (req, res) => {
     if (!u) return res.status(404).json({ message: 'User not found.' });
     const ok = await bcrypt.compare(String(currentPassword), u.password_hash);
     if (!ok) return res.status(401).json({ message: 'Current password is incorrect.' });
-    const hash = await bcrypt.hash(String(newPassword), 10);
+    const hash = await bcrypt.hash(String(newPassword), BCRYPT_ROUNDS);
     await pool.query(
       `UPDATE users SET password_hash = $1, password_changed_at = NOW(), updated_at = NOW() WHERE id = $2::uuid`,
       [hash, u.id]
@@ -269,7 +294,7 @@ router.post('/change-password-expired', authLoginLimiter, async (req, res) => {
     if (!user?.is_active) {
       return res.status(401).json({ message: 'Account is not active.' });
     }
-    const hash = await bcrypt.hash(String(newPassword), 10);
+    const hash = await bcrypt.hash(String(newPassword), BCRYPT_ROUNDS);
     await pool.query(
       `UPDATE users SET password_hash = $1, password_changed_at = NOW(), failed_login_count = 0, locked_until = NULL, updated_at = NOW()
        WHERE id = $2::uuid`,
@@ -387,7 +412,7 @@ router.post('/reset-password', async (req, res) => {
     if (!u.rows[0]) {
       return res.status(400).json({ message: 'Invalid or expired reset token.' });
     }
-    const hash = await bcrypt.hash(String(newPassword), 10);
+    const hash = await bcrypt.hash(String(newPassword), BCRYPT_ROUNDS);
     await client.query(
       `UPDATE users SET password_hash = $1, password_reset_token = NULL, password_reset_expires_at = NULL,
          password_changed_at = NOW(), updated_at = NOW()

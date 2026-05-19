@@ -57,7 +57,7 @@ export default function ForgotPasswordPage() {
           {loading ? 'Sending…' : 'Request reset'}
         </button>
       </form>
-      {devToken && (
+      {process.env.NODE_ENV === 'development' && devToken ? (
         <section className="module-card" style={{ marginTop: '1rem', background: '#fffbeb' }}>
           <p style={{ margin: 0, fontSize: '0.9rem' }}>
             <strong>Development only:</strong> use this token with <code>/reset-password</code> (POST{' '}
@@ -65,7 +65,7 @@ export default function ForgotPasswordPage() {
           </p>
           <pre style={{ wordBreak: 'break-all', fontSize: '0.75rem' }}>{devToken}</pre>
         </section>
-      )}
+      ) : null}
       <p style={{ marginTop: '1.25rem' }}>
         <Link href="/login">Back to sign in</Link>
       </p>

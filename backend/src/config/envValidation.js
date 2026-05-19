@@ -26,14 +26,42 @@ export function validateProductionEnv() {
     throw new Error('Production requires FRONTEND_URL (comma-separated allowed web origins).');
   }
 
+  const origins = String(process.env.FRONTEND_URL)
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  for (const o of origins) {
+    if (/localhost|127\.0\.0\.1/i.test(o)) {
+      throw new Error('Production FRONTEND_URL must not include localhost or 127.0.0.1.');
+    }
+  }
+
   const dbUrl = process.env.DATABASE_URL || '';
   if (!String(dbUrl).trim() || !/^postgres(ql)?:\/\//i.test(dbUrl)) {
     throw new Error('Production requires a valid DATABASE_URL (postgresql://…).');
+  }
+  if (/localhost|127\.0\.0\.1/i.test(dbUrl) && !/\.railway\.internal|\.rlwy\.net/i.test(dbUrl)) {
+    throw new Error('Production DATABASE_URL must not point to localhost.');
+  }
+
+  const publicApi = process.env.NEXT_PUBLIC_API_URL || '';
+  if (/localhost|127\.0\.0\.1/i.test(publicApi)) {
+    throw new Error('Production must not set NEXT_PUBLIC_API_URL to localhost (use /api proxy).');
   }
 
   const enc = process.env.HAMS_ENCRYPTION_KEY;
   if (!enc || String(enc).length < 32) {
     throw new Error('Production requires HAMS_ENCRYPTION_KEY with at least 32 characters (TOTP and sensitive fields).');
+  }
+
+  const backupEnc = process.env.BACKUP_ENCRYPTION_KEY;
+  if (!backupEnc || String(backupEnc).length < 32) {
+    throw new Error('Production requires BACKUP_ENCRYPTION_KEY with at least 32 characters (encrypted backups).');
+  }
+
+  const devBackupDefault = 'hams-backup-dev-key-change-in-production';
+  if (String(backupEnc) === devBackupDefault) {
+    throw new Error('Production must not use the default BACKUP_ENCRYPTION_KEY.');
   }
 
   const jwtExp = process.env.JWT_EXPIRES_IN || '1h';

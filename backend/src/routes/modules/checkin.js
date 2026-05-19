@@ -1336,7 +1336,7 @@ async function processCheckIn(req, res) {
       return res.status(400).json({
         message: relaxScheduled
           ? `Flight status validation failed: flight is ${fs}; check-in is not allowed.`
-          : `Check-in requires flight status CHECKIN_OPEN, BOARDING, or DELAYED (current: ${fs}). In Flight & Operations use Open ck-in or dispatch release. Optional: OCC_RELAX_CHECKIN_STATUSES=true also allows SCHEDULED.`
+          : `Check-in requires flight status CHECKIN_OPEN, BOARDING, or DELAYED (current: ${fs}). In Flight Operations use Open ck-in or dispatch release. Optional: OCC_RELAX_CHECKIN_STATUSES=true also allows SCHEDULED.`
       });
     }
 

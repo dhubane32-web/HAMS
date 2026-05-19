@@ -9,6 +9,12 @@ import {
 import { recordOccFlightEvent } from '../../services/occFlightEvents.js';
 import { assertCrewAssignableForFlight } from '../../services/crewCompliance.js';
 import { writeAudit } from '../../services/auditService.js';
+import {
+  queryOccDashboardFlights,
+  queryOccFlightLive,
+  updateFlightEta,
+  ensureOccEtaColumns
+} from '../../lib/occFlightColumns.js';
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -77,18 +83,8 @@ occRouter.get('/duty-limits', requireAuth, requireRoles(...ROLES_OPS_FLIGHT_DETA
 occRouter.get('/dashboard', requireAuth, requireRoles(...ROLES_OPS_READ), async (req, res) => {
   const dateStr = req.query.date ? String(req.query.date).slice(0, 10) : new Date().toISOString().slice(0, 10);
   try {
-    const r = await pool.query(
-      `SELECT f.id, f.flight_number, f.departure_airport, f.arrival_airport, f.departure_time, f.arrival_time,
-              f.status, f.gate, f.aircraft_id, f.eta_current_at,
-              f.actual_off_block_at, f.actual_airborne_at, f.actual_landed_at,
-              a.tail_number, a.model
-       FROM flights f
-       LEFT JOIN aircraft a ON a.id = f.aircraft_id
-       WHERE (f.departure_time AT TIME ZONE 'UTC')::date = $1::date
-       ORDER BY f.departure_time ASC`,
-      [dateStr]
-    );
-    const flights = r.rows.map((row) => ({
+    const { rows, schemaMode } = await queryOccDashboardFlights(pool, dateStr);
+    const flights = rows.map((row) => ({
       ...row,
       live: deriveFlightLive(row)
     }));
@@ -105,17 +101,17 @@ occRouter.get('/dashboard', requireAuth, requireRoles(...ROLES_OPS_READ), async 
     } catch {
       enterprise = null;
     }
-    return res.json({ date: dateStr, flights, enterprise });
+    return res.json({
+      date: dateStr,
+      flights,
+      enterprise,
+      schemaMode,
+      etaNote: schemaMode === 'compat' ? 'Using arrival_time as ETA until eta_current_at is migrated.' : null
+    });
   } catch (e) {
-    if (e?.code === '42703') {
-      return res.status(503).json({
-        message: 'OCC flight columns missing (eta_current_at, actual_off_block_at, …). Apply database/occ_control_center.sql.',
-        error: e.message
-      });
-    }
     if (e?.code === '42P01') {
       return res.status(503).json({
-        message: 'OCC tables missing. Apply database/occ_control_center.sql then occ_control_center_v2.sql (or backend/scripts/apply-db-fixes.sh).',
+        message: 'OCC tables missing. Apply database/occ_control_center.sql then occ_control_center_v2.sql.',
         error: e.message
       });
     }
@@ -127,17 +123,7 @@ occRouter.get('/flights/:flightId/live', requireAuth, requireRoles(...ROLES_OPS_
   const { flightId } = req.params;
   if (!isUuid(flightId)) return res.status(400).json({ message: 'Invalid flight id.' });
   try {
-    const r = await pool.query(
-      `SELECT f.id, f.flight_number, f.departure_airport, f.arrival_airport, f.departure_time, f.arrival_time,
-              f.status, f.gate, f.aircraft_id, f.eta_current_at,
-              f.actual_off_block_at, f.actual_airborne_at, f.actual_landed_at,
-              a.tail_number, a.model
-       FROM flights f
-       LEFT JOIN aircraft a ON a.id = f.aircraft_id
-       WHERE f.id = $1::uuid`,
-      [flightId]
-    );
-    const row = r.rows[0];
+    const row = await queryOccFlightLive(pool, flightId);
     if (!row) return res.status(404).json({ message: 'Flight not found.' });
     return res.json({ flight: row, live: deriveFlightLive(row) });
   } catch (e) {
@@ -157,14 +143,9 @@ occRouter.post('/flights/:flightId/eta', requireAuth, requireRoles(...ROLES_OPS_
     return res.status(400).json({ message: 'etaCurrentAt must be a valid date/time.' });
   }
   try {
-    const u = await pool.query(
-      `UPDATE flights SET eta_current_at = $2::timestamptz WHERE id = $1::uuid
-       RETURNING id, flight_number, status, departure_time, arrival_time, eta_current_at,
-         actual_off_block_at, actual_airborne_at, actual_landed_at`,
-      [flightId, iso]
-    );
-    if (u.rows.length === 0) return res.status(404).json({ message: 'Flight not found.' });
-    const row = u.rows[0];
+    await ensureOccEtaColumns(pool).catch(() => {});
+    const row = await updateFlightEta(pool, flightId, iso);
+    if (!row) return res.status(404).json({ message: 'Flight not found.' });
     await recordOccFlightEvent(pool, {
       flightId,
       eventType: 'ETA_UPDATE',
@@ -182,7 +163,7 @@ occRouter.post('/flights/:flightId/eta', requireAuth, requireRoles(...ROLES_OPS_
     });
     return res.json({ flight: row, live: deriveFlightLive(row) });
   } catch (e) {
-    if (e?.code === '42703') {
+    if (e?.code === '42703' || e?.code === 'SCHEMA') {
       return res.status(503).json({ message: 'Flight ETA columns not migrated (eta_current_at).' });
     }
     return res.status(500).json({ message: 'Failed to update ETA.', error: e.message });

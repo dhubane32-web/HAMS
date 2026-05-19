@@ -5,6 +5,9 @@ import { spawn } from 'child_process';
 import crypto from 'crypto';
 import os from 'os';
 import { pool } from '../config/db.js';
+import { getConfig } from '../config/index.js';
+import { sendOperationalAlert } from './alertService.js';
+import { logError, logInfo } from '../lib/safeLog.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const backendRoot = path.resolve(__dirname, '../../');
@@ -87,6 +90,35 @@ function getConfiguredPaths() {
     ticketPdfDir: process.env.BACKUP_TICKET_PDF_DIR || DEFAULT_TICKET_PDF_DIR,
     reportsDir: process.env.BACKUP_REPORTS_DIR || DEFAULT_REPORTS_DIR
   };
+}
+
+/** Non-secret env snapshot for disaster recovery (keys + redacted values). */
+async function createEnvConfigBackup(targetDir, stamp) {
+  const jsonName = `env-config-${stamp}.json`;
+  const jsonPath = path.join(targetDir, jsonName);
+  const allowlist = [
+    'NODE_ENV',
+    'PORT',
+    'HOST',
+    'FRONTEND_URL',
+    'HAMS_EXTRA_CORS_ORIGINS',
+    'JWT_EXPIRES_IN',
+    'BACKUP_ROOT_DIR',
+    'BACKUP_SCHEDULER_ENABLED',
+    'BACKUP_RETENTION_DAILY_DAYS',
+    'HAMS_RATE_LIMIT_MAX',
+    'HAMS_AUTH_LOGIN_MAX',
+    'HAMS_MONITORING_ENABLED'
+  ];
+  const snapshot = {
+    exported_at: new Date().toISOString(),
+    variables: allowlist.map((key) => ({
+      key,
+      set: process.env[key] != null && String(process.env[key]).trim() !== ''
+    }))
+  };
+  await fs.writeFile(jsonPath, `${JSON.stringify(snapshot, null, 2)}\n`, 'utf8');
+  return { label: 'env-config', storedName: jsonName };
 }
 
 async function createSystemSettingsBackup(targetDir, stamp) {
@@ -197,6 +229,7 @@ export async function runFullBackup({ triggeredBy = null, triggerKind = 'manual'
   try {
     const artifacts = [];
     artifacts.push(await createDatabaseBackup(runDir, stamp));
+    artifacts.push(await createEnvConfigBackup(runDir, stamp));
     artifacts.push(await createSystemSettingsBackup(runDir, stamp));
     if (await pathExists(uploadsDir)) artifacts.push(await archiveDirectory(uploadsDir, runDir, 'uploads', stamp));
     if (await pathExists(ticketPdfDir)) artifacts.push(await archiveDirectory(ticketPdfDir, runDir, 'ticket-pdfs', stamp));
@@ -231,6 +264,23 @@ export async function runFullBackup({ triggeredBy = null, triggerKind = 'manual'
       created.push(row);
     }
 
+    const cfg = getConfig();
+    if (cfg.backup.verifyAfterRun && created.length > 0) {
+      const dbRow = created.find((r) => r.backup_type === 'database') || created[0];
+      try {
+        await simulateRestoreFromBackupLog({ id: dbRow.id });
+        logInfo('[backup] post-run verification passed', { id: dbRow.id });
+      } catch (verifyErr) {
+        await sendOperationalAlert({
+          severity: 'critical',
+          title: 'Backup verification failed',
+          message: verifyErr?.message || 'simulate restore failed',
+          context: { backupId: dbRow.id, triggerKind }
+        });
+        throw verifyErr;
+      }
+    }
+
     return { triggeredBy, backupRootDir, runDir, rows: created };
   } catch (error) {
     if (created.length > 0) {
@@ -248,6 +298,13 @@ export async function runFullBackup({ triggeredBy = null, triggerKind = 'manual'
         lastError: String(error?.message || error)
       });
     }
+    logError('[backup] run failed', error, { triggerKind, triggeredBy });
+    await sendOperationalAlert({
+      severity: 'critical',
+      title: 'HAMS backup failed',
+      message: error?.message || 'backup run failed',
+      context: { triggerKind, triggeredBy }
+    }).catch(() => {});
     throw error;
   } finally {
     client.release();
@@ -392,7 +449,12 @@ export async function simulateRestoreFromBackupLog({ id } = {}) {
 }
 
 export async function cleanupBackupsByRetention() {
-  const policyDays = { daily: 7, weekly: 28, monthly: 365 };
+  const cfg = getConfig();
+  const policyDays = {
+    daily: cfg.backup.retentionDailyDays,
+    weekly: cfg.backup.retentionWeeklyDays,
+    monthly: cfg.backup.retentionMonthlyDays
+  };
   const { rows } = await listBackupLogs({ limit: 1000, offset: 0 });
   const now = Date.now();
   let removedCount = 0;

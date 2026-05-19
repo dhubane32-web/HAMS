@@ -28,6 +28,9 @@ echo "$comm" | grep -q 'commercial-core' && ok "/api/commercial/health" || bad "
 ent=$(curl -sf --max-time 20 "$API_BASE/api/operations/enterprise/health" || true)
 echo "$ent" | grep -q 'flight-ops-enterprise' && ok "/api/operations/enterprise/health" || bad "/api/operations/enterprise/health"
 
+ent_alias=$(curl -sf --max-time 20 "$API_BASE/api/enterprise-ops/health" || true)
+echo "$ent_alias" | grep -q 'flight-ops-enterprise' && ok "/api/enterprise-ops/health" || bad "/api/enterprise-ops/health"
+
 occ=$(curl -sf --max-time 20 "$API_BASE/api/occ/status" || true)
 echo "$occ" | grep -q 'OCC' && ok "/api/occ/status" || bad "/api/occ/status"
 

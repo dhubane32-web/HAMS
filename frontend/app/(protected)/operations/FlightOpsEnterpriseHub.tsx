@@ -65,6 +65,10 @@ export function FlightOpsEnterpriseHub() {
         setLoadError(msg);
         if (msg.includes('503') || msg.includes('schema')) {
           setSchemaHint('Apply database/migrations/005_flight_ops_enterprise.sql on PostgreSQL (Railway).');
+        } else if (msg.includes('404') || msg.includes('Not found')) {
+          setSchemaHint(
+            'Enterprise API not on this backend build. Redeploy Railway from repo root (see docs/RAILWAY_REDEPLOY.md), then run scripts/sync-railway-production.sh.'
+          );
         } else if (!quiet) toast.error(msg);
       } finally {
         if (!quiet) setLoading(false);

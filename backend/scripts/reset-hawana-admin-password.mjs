@@ -7,6 +7,7 @@
  */
 import pg from 'pg';
 import bcrypt from 'bcrypt';
+import { BCRYPT_ROUNDS } from '../src/lib/bcryptConfig.js';
 
 const { Pool } = pg;
 
@@ -43,7 +44,7 @@ async function main() {
     await pool.query(`DO $$ BEGIN ALTER TYPE user_role ADD VALUE 'super_admin';
     EXCEPTION WHEN duplicate_object THEN NULL; END $$;`);
 
-    const hash = await bcrypt.hash(password, 10);
+    const hash = await bcrypt.hash(password, BCRYPT_ROUNDS);
     const upsert = await pool.query(
       `INSERT INTO users (full_name, email, password_hash, role, is_active, failed_login_count, locked_until)
        VALUES ($1, $2, $3, 'super_admin'::user_role, TRUE, 0, NULL)

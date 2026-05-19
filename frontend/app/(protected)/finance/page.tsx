@@ -3,8 +3,8 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 import type { UserRole } from '@/lib/roles';
-import { getPublicApiBaseUrl } from '@/lib/api-base';
 import { getClientAuthToken } from '@/lib/auth-session';
+import { apiFetch, apiFetchJson } from '@/lib/api-client';
 import {
   ResponsiveContainer,
   LineChart,
@@ -21,8 +21,6 @@ import {
   Cell
 } from 'recharts';
 import './finance-erp.css';
-
-const API_BASE_URL = getPublicApiBaseUrl();
 
 const EXPENSE_CATEGORIES = [
   'FUEL',
@@ -139,29 +137,15 @@ export default function FinancePage() {
   const fetchJson = useCallback(async <T,>(path: string, init?: RequestInit): Promise<T> => {
     const token = getToken();
     if (!token) throw new Error('Please login first from /login.');
-    const res = await fetch(`${API_BASE_URL}${path}`, {
+    return apiFetchJson<T>(path, {
       ...init,
       headers: {
         ...(init?.body ? { 'Content-Type': 'application/json' } : {}),
         ...(init?.headers || {}),
         Authorization: `Bearer ${token}`
-      }
+      },
+      endpointTag: `finance:${path}`
     });
-    const text = await res.text();
-    let body: { message?: string } & Partial<T> = {};
-    if (text) {
-      try {
-        body = JSON.parse(text) as { message?: string } & T;
-      } catch {
-        body = {};
-      }
-    }
-    if (!res.ok) {
-      const err = new Error(body.message || 'Request failed.') as Error & { status?: number };
-      err.status = res.status;
-      throw err;
-    }
-    return body as T;
   }, []);
 
   useEffect(() => {
@@ -266,7 +250,10 @@ export default function FinancePage() {
     if (!token) return toast.error('Login required.');
     const q = new URLSearchParams({ date: payDate, export: 'csv' });
     if (payStatus) q.set('status', payStatus);
-    const res = await fetch(`${API_BASE_URL}/api/finance/payments?${q}`, { headers: { Authorization: `Bearer ${token}` } });
+    const res = await apiFetch(`/api/finance/payments?${q}`, {
+      headers: { Authorization: `Bearer ${token}` },
+      endpointTag: 'finance:payments-csv'
+    });
     const blob = await res.blob();
     if (!res.ok) {
       toast.error('Export failed.');

@@ -17,10 +17,13 @@ import {
   runFullBackup,
   simulateRestoreFromBackupLog
 } from '../../services/backupService.js';
+import { getConfig } from '../../config/index.js';
+import { getFullHealth } from '../../services/healthService.js';
+import { getOpsSummary } from '../../services/monitoringService.js';
+import { getDiagnosticsDashboard } from '../../services/diagnosticsService.js';
+import { BCRYPT_ROUNDS } from '../../lib/bcryptConfig.js';
 
 const router = express.Router();
-
-const BCRYPT_ROUNDS = 10;
 
 function hashResetToken(token) {
   return crypto.createHash('sha256').update(String(token), 'utf8').digest('hex');
@@ -536,9 +539,14 @@ router.post('/backup/cleanup', requireAuth, requireUserManager, async (req, res)
 router.get('/backup/health', requireAuth, requireUserManager, async (_req, res) => {
   try {
     const [health, offsite] = await Promise.all([getBackupHealthSummary(), getOffsiteProviderStatus()]);
+    const cfg = getConfig();
     return res.json({
       health,
-      retentionPolicy: { daily: '7d', weekly: '4w', monthly: '12m' },
+      retentionPolicy: {
+        daily: `${cfg.backup.retentionDailyDays}d`,
+        weekly: `${cfg.backup.retentionWeeklyDays}d`,
+        monthly: `${cfg.backup.retentionMonthlyDays}d`
+      },
       scheduler: {
         daily: `${String(process.env.BACKUP_DAILY_HOUR_UTC || 2).padStart(2, '0')}:${String(process.env.BACKUP_DAILY_MINUTE_UTC || 0).padStart(2, '0')} UTC`,
         weekly: `Sunday ${String(process.env.BACKUP_WEEKLY_HOUR_UTC || 2).padStart(2, '0')}:${String(process.env.BACKUP_WEEKLY_MINUTE_UTC || 15).padStart(2, '0')} UTC`,
@@ -548,6 +556,27 @@ router.get('/backup/health', requireAuth, requireUserManager, async (_req, res) 
     });
   } catch (error) {
     return res.status(500).json({ message: 'Failed to load backup health.', error: error.message });
+  }
+});
+
+router.get('/monitoring/ops', requireAuth, requireSuperAdmin, async (_req, res) => {
+  try {
+    const [health, ops] = await Promise.all([
+      getFullHealth({ includeBackup: true, includeMonitoring: true }),
+      getOpsSummary()
+    ]);
+    return res.json({ health, ops });
+  } catch (error) {
+    return res.status(500).json({ message: 'Failed to load ops summary.', error: error.message });
+  }
+});
+
+router.get('/diagnostics', requireAuth, requireSuperAdmin, async (_req, res) => {
+  try {
+    const dashboard = await getDiagnosticsDashboard();
+    return res.json(dashboard);
+  } catch (error) {
+    return res.status(500).json({ message: 'Failed to load diagnostics.', error: error.message });
   }
 });
 

@@ -1,4 +1,7 @@
 -- OCC v2: duty-time policy display + extra delay codes (idempotent).
+-- If OCC Hub shows missing occ_duty_limit_config, apply with:
+--   bash backend/scripts/apply-occ-migrations.sh
+-- (requires DATABASE_URL) or run this file after occ_control_center.sql.
 
 CREATE TABLE IF NOT EXISTS occ_duty_limit_config (
   id SMALLINT PRIMARY KEY DEFAULT 1,

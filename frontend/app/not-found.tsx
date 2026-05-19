@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { BRAND } from '@/lib/brand';
 
 export default function NotFound() {
   return (
@@ -25,25 +26,26 @@ export default function NotFound() {
       >
         <h1 style={{ margin: '0 0 0.5rem', fontSize: '1.25rem' }}>Page not found</h1>
         <p style={{ margin: '0 0 1rem', color: '#64748b', fontSize: '0.9rem', lineHeight: 1.5 }}>
-          This URL is not part of Hawana HAMS. Use the <strong>Next.js</strong> app port (often{' '}
-          <code style={{ fontSize: '0.85em' }}>3000</code> or <code style={{ fontSize: '0.85em' }}>3001</code>) — not the
-          API port (<code style={{ fontSize: '0.85em' }}>5013</code>).
+          The link may be outdated or typed incorrectly. Return to the {BRAND.companyName} traveler site or use staff
+          sign-in.
         </p>
         <ul style={{ margin: '0 0 1rem', paddingLeft: '1.1rem', color: '#475569', fontSize: '0.88rem' }}>
           <li>
-            <Link href="/login" style={{ color: '#1d4ed8', fontWeight: 600 }}>
-              Sign in
+            <Link href="/" style={{ color: '#1d4ed8', fontWeight: 600 }}>
+              Home
             </Link>
           </li>
           <li>
-            <Link href="/dashboard" style={{ color: '#1d4ed8', fontWeight: 600 }}>
-              Dashboard
+            <Link href="/login" style={{ color: '#1d4ed8', fontWeight: 600 }}>
+              Staff sign-in
             </Link>
           </li>
         </ul>
-        <p style={{ margin: 0, fontSize: '0.78rem', color: '#94a3b8' }}>
-          From the repo: <code>cd HAMS && npm run dev</code> — check the terminal for the exact &quot;Local:&quot; URL.
-        </p>
+        {process.env.NODE_ENV === 'development' ? (
+          <p style={{ margin: 0, fontSize: '0.78rem', color: '#94a3b8' }}>
+            Development: Next.js UI is usually port <code>3000</code>; API is typically <code>5013</code>.
+          </p>
+        ) : null}
       </div>
     </main>
   );

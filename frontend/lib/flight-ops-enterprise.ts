@@ -103,30 +103,48 @@ const emptyFeed = (date: string): EnterpriseFeed => ({
   constants: { minTurnaroundMinutes: 45 }
 });
 
+const ENTERPRISE_FEED_PATHS = (date: string) => [
+  `/api/operations/enterprise/feed?date=${encodeURIComponent(date)}`,
+  `/api/enterprise-ops/feed?date=${encodeURIComponent(date)}`
+];
+
+export async function fetchEnterpriseHealth(): Promise<boolean> {
+  for (const path of ['/api/operations/enterprise/health', '/api/enterprise-ops/health']) {
+    try {
+      const h = await apiFetchJson<{ module?: string }>(path, { retries: 0 });
+      if (h?.module === 'flight-ops-enterprise') return true;
+    } catch {
+      /* try next */
+    }
+  }
+  return false;
+}
+
 export async function fetchEnterpriseFeed(date: string, retries = 2): Promise<EnterpriseFeed> {
   let lastErr: unknown;
+  const paths = ENTERPRISE_FEED_PATHS(date);
   for (let i = 0; i <= retries; i += 1) {
-    try {
-      const data = await apiFetchJson<EnterpriseFeed>(
-        `/api/operations/enterprise/feed?date=${encodeURIComponent(date)}`,
-        { retries: 0 }
-      );
-      return {
-        ...emptyFeed(date),
-        ...data,
-        flights: data.flights ?? [],
-        rotations: data.rotations ?? [],
-        alerts: data.alerts ?? [],
-        conflicts: data.conflicts ?? [],
-        utilization: data.utilization ?? [],
-        dispatchQueue: data.dispatchQueue ?? []
-      };
-    } catch (e) {
-      lastErr = e;
-      const msg = e instanceof Error ? e.message : '';
-      if (msg.includes('503') || msg.includes('schema')) return emptyFeed(date);
-      if (i < retries) await new Promise((r) => setTimeout(r, 800 * (i + 1)));
+    for (const path of paths) {
+      try {
+        const data = await apiFetchJson<EnterpriseFeed>(path, { retries: 0 });
+        return {
+          ...emptyFeed(date),
+          ...data,
+          flights: data.flights ?? [],
+          rotations: data.rotations ?? [],
+          alerts: data.alerts ?? [],
+          conflicts: data.conflicts ?? [],
+          utilization: data.utilization ?? [],
+          dispatchQueue: data.dispatchQueue ?? []
+        };
+      } catch (e) {
+        lastErr = e;
+        const msg = e instanceof Error ? e.message : '';
+        if (msg.includes('404') || msg.includes('Not found')) continue;
+        if (msg.includes('503') || msg.includes('schema')) return emptyFeed(date);
+      }
     }
+    if (i < retries) await new Promise((r) => setTimeout(r, 800 * (i + 1)));
   }
   throw lastErr;
 }

@@ -3,8 +3,8 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import toast from 'react-hot-toast';
 import type { UserRole } from '@/lib/roles';
-import { getPublicApiBaseUrl } from '@/lib/api-base';
 import { getClientAuthToken } from '@/lib/auth-session';
+import { apiFetchJson } from '@/lib/api-client';
 import SalesCommercialWorkspace from '@/components/sales/SalesCommercialWorkspace';
 import {
   formatPercent1Decimal,
@@ -12,8 +12,6 @@ import {
   formatSalesCurrency,
   SALES_DISPLAY_CURRENCY
 } from '@/lib/sales-format';
-
-const API_BASE_URL = getPublicApiBaseUrl();
 
 type Tab =
   | 'dashboard'
@@ -164,23 +162,11 @@ export default function SalesPage() {
   const fetchJson = useCallback(async <T,>(path: string, init?: RequestInit): Promise<T> => {
     const token = getToken();
     if (!token) throw new Error('Please login first from /login.');
-    const res = await fetch(`${API_BASE_URL}${path}`, {
+    return apiFetchJson<T>(path, {
       ...init,
-      headers: buildAuthHeaders(token, init)
+      headers: buildAuthHeaders(token, init),
+      endpointTag: `sales:${path}`
     });
-    const text = await res.text();
-    let body: { message?: string } & Partial<T> = {};
-    if (text) {
-      try {
-        body = JSON.parse(text) as { message?: string } & T;
-      } catch {
-        body = {};
-      }
-    }
-    if (!res.ok) {
-      throw new Error(body.message || 'Request failed.');
-    }
-    return body as T;
   }, []);
 
   useEffect(() => {
