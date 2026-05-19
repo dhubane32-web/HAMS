@@ -43,6 +43,8 @@ for f in "$MIG_DIR"/[0-9][0-9][0-9]_*.sql; do
   echo "[migrations] apply $base"
   if [[ "$base" == "005_flight_ops_enterprise.sql" ]]; then
     psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$ROOT/database/flight_ops_enterprise.sql"
+  elif [[ "$base" == "006_commercial_core_phase2.sql" ]]; then
+    psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$ROOT/database/commercial_core_phase2.sql"
   else
     psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$f"
   fi

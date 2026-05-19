@@ -7,6 +7,7 @@ import {
   Users,
   Wallet,
   Megaphone,
+  Briefcase,
   Headset,
   BarChart3,
   Settings,
@@ -56,6 +57,12 @@ export const navItems: NavItem[] = [
     href: '/booking',
     label: 'Booking & Ticketing',
     icon: BookCopy,
+    roles: BOOKING
+  },
+  {
+    href: '/commercial',
+    label: 'Commercial Core',
+    icon: Briefcase,
     roles: BOOKING
   },
   {

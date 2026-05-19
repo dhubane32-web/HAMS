@@ -63,7 +63,23 @@ Enterprise operations reference for **Hawana Airways HAMS** on **Railway** (API 
 
 ---
 
-## 3. Enterprise Flight Operations (OCC)
+## 3. Commercial Core — Phase 2
+
+| Step | Command |
+|------|---------|
+| Apply migration 006 | `bash backend/scripts/apply-pending-migrations.sh` |
+| Verify API | `cd backend && npm run test:commercial` |
+| UI | **Commercial Core** (`/commercial`) — multi-city, SSR/OSI, reissue/refund, CRM profiles, notification outbox |
+
+**API base:** `/api/commercial` — inventory, multi-city booking, SSR/OSI, ticket reissue/refund, profiles, notifications.
+
+**Env (optional):** `HAMS_PNR_PREFIX=HW`, `HAMS_WHATSAPP_WEBHOOK_URL=https://…` for WhatsApp; SMTP for email (same as e-ticket).
+
+**OCC integration:** Recording a flight delay via Operations/OCC queues `DELAY_ALERT` emails (and WhatsApp when configured) to booked passengers.
+
+---
+
+## 4. Enterprise Flight Operations (OCC)
 
 | Step | Command |
 |------|---------|

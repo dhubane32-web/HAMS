@@ -30,6 +30,9 @@ import {
 } from '../../services/salesCommercialSync.js';
 import { releaseSeatLegAllocationsForBooking, syncSeatLegAllocationsForBooking } from '../../services/seatInventorySync.js';
 import { recordOccFlightEvent } from '../../services/occFlightEvents.js';
+import { generateAirlinePnr } from '../../services/commercialBookingService.js';
+import { syncTicketCouponsForBooking } from '../../services/ticketCouponService.js';
+import { scheduleBookingNotifications } from '../../services/commercialNotificationService.js';
 
 const router = express.Router();
 
@@ -133,6 +136,13 @@ async function issueTicketsForBooking(client, bookingId, userId, { requirePaid =
   }
 
   await syncSeatLegAllocationsForBooking(client, bookingId);
+  try {
+    await syncTicketCouponsForBooking(client, bookingId);
+  } catch (e) {
+    if (process.env.NODE_ENV !== 'production') {
+      console.warn('[booking] ticket coupons:', e?.message || e);
+    }
+  }
 
   if (newlyIssued > 0) {
     await logFinanceTransaction(client, {
@@ -790,8 +800,14 @@ router.get(
     }
 
     const normalizedTripType = String(tripType || 'ONE_WAY').toUpperCase();
-    if (!['ONE_WAY', 'RETURN'].includes(normalizedTripType)) {
-      return res.status(400).json({ message: 'tripType must be ONE_WAY or RETURN.' });
+    if (!['ONE_WAY', 'RETURN', 'MULTI_CITY'].includes(normalizedTripType)) {
+      return res.status(400).json({ message: 'tripType must be ONE_WAY, RETURN, or MULTI_CITY.' });
+    }
+    if (normalizedTripType === 'MULTI_CITY') {
+      return res.status(400).json({
+        message: 'Use POST /api/commercial/bookings/multi-city for multi-city itineraries.',
+        code: 'USE_COMMERCIAL_MULTI_CITY'
+      });
     }
     if (normalizedTripType === 'RETURN') {
       if (!returnDate) {
@@ -932,8 +948,14 @@ router.post('/', requireAuth, requireRoles(...ROLES_BOOKING_DESK), async (req, r
   const taId = travelAgentId && isUuid(String(travelAgentId)) ? String(travelAgentId) : null;
 
   const normalizedTripType = String(tripType || 'ONE_WAY').toUpperCase();
-  if (!['ONE_WAY', 'RETURN'].includes(normalizedTripType)) {
-    return res.status(400).json({ message: 'tripType must be ONE_WAY or RETURN.' });
+  if (!['ONE_WAY', 'RETURN', 'MULTI_CITY'].includes(normalizedTripType)) {
+    return res.status(400).json({ message: 'tripType must be ONE_WAY, RETURN, or MULTI_CITY.' });
+  }
+  if (normalizedTripType === 'MULTI_CITY') {
+    return res.status(400).json({
+      message: 'Use POST /api/commercial/bookings/multi-city for multi-city itineraries.',
+      code: 'USE_COMMERCIAL_MULTI_CITY'
+    });
   }
 
   if (!outboundFlightId || !Array.isArray(passengers) || passengers.length === 0) {
@@ -1002,7 +1024,12 @@ router.post('/', requireAuth, requireRoles(...ROLES_BOOKING_DESK), async (req, r
       }
     }
 
-    const pnr = await generateUniquePnr(client);
+    let pnr;
+    try {
+      pnr = await generateAirlinePnr(client);
+    } catch {
+      pnr = await generateUniquePnr(client);
+    }
 
     let outboundAmountPerPax = 0;
     let inboundAmountPerPax = 0;
@@ -1350,6 +1377,8 @@ router.post('/', requireAuth, requireRoles(...ROLES_BOOKING_DESK), async (req, r
 
     await client.query('COMMIT');
 
+    scheduleBookingNotifications(booking.id);
+
     try {
       if (outboundFlight?.id) {
         await recordOccFlightEvent(pool, {
@@ -1634,17 +1663,35 @@ router.get('/pnr/:pnr', requireAuth, requireRoles(...ROLES_BOOKING_DESK), async 
       [booking.id]
     );
 
+    let ssr = [];
+    let osi = [];
+    try {
+      const extras = await listSsrOsiFromCommercial(pool, booking.id);
+      ssr = extras.ssr;
+      osi = extras.osi;
+    } catch {
+      /* schema optional */
+    }
+
     return res.status(200).json({
       booking,
       flights: flightRows.rows,
       passengers: passengers.rows,
       tickets: tickets.rows,
-      payments: payments.rows
+      payments: payments.rows,
+      ssr,
+      osi
     });
   } catch (error) {
     return res.status(500).json({ message: 'Failed to retrieve booking by PNR.', error: error.message });
   }
 });
+
+async function listSsrOsiFromCommercial(db, bookingId) {
+  const { listSsrOsi } = await import('../../services/commercialBookingService.js');
+  const client = { query: (...args) => db.query(...args) };
+  return listSsrOsi(client, bookingId);
+}
 
 router.post('/retrieve', requireAuth, requireRoles(...ROLES_TICKET_RETRIEVE), handleTicketRetrieve);
 router.get('/retrieve', requireAuth, requireRoles(...ROLES_TICKET_RETRIEVE), handleTicketRetrieve);

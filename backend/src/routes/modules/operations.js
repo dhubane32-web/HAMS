@@ -17,6 +17,7 @@ import { recordOccFlightEvent, applyStatusWithTracking } from '../../services/oc
 import { logFinanceTransaction } from '../../services/financeLedger.js';
 import { registerOccRoutes } from './occ.js';
 import { registerFlightOpsEnterpriseRoutes } from './flight-ops-enterprise.js';
+import { notifyFlightDelay, processNotificationOutbox } from '../../services/commercialNotificationService.js';
 
 const router = express.Router();
 
@@ -1438,6 +1439,11 @@ router.post('/flights/:flightId/delays', requireAuth, requireRoles(...ROLES_OPS_
     );
 
     await client.query('COMMIT');
+
+    notifyFlightDelay(flightId, { delayMinutes: minutes, reason })
+      .then(() => processNotificationOutbox(100))
+      .catch(() => {});
+
     return res.status(201).json({
       message: 'Delay recorded successfully.',
       delay: delay.rows[0],

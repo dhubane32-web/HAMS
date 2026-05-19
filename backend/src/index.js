@@ -29,6 +29,7 @@ import salesRoutes from './routes/modules/sales.js';
 import { salesCommercialRouter } from './routes/modules/salesCommercialExtras.js';
 import customerServiceRoutes from './routes/modules/customer-service.js';
 import reportsAnalyticsRoutes from './routes/modules/reports-analytics.js';
+import commercialRoutes from './routes/modules/commercial.js';
 import { startBackupScheduler } from './services/backupScheduler.js';
 import healthRouter from './routes/health.js';
 import { occPublicRouter } from './routes/modules/occ.js';
@@ -118,6 +119,7 @@ app.use('/api/sales/commercial', salesCommercialRouter);
 app.use('/api/sales', salesRoutes);
 app.use('/api/customer-service', customerServiceRoutes);
 app.use('/api/reports-analytics', reportsAnalyticsRoutes);
+app.use('/api/commercial', commercialRoutes);
 
 app.use((_req, res) => {
   res.status(404).json({ message: 'Not found.' });
