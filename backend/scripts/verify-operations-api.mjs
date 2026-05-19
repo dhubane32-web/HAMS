@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Verifies Flight & Operations APIs (OCC dashboard, details, status rules, delays, dispatch checklist).
+ * Verifies Flight Operations APIs (OCC dashboard, details, status rules, delays, dispatch checklist).
  * Usage:
  *   BASE_URL=http://127.0.0.1:5000 node backend/scripts/verify-operations-api.mjs
  */
@@ -183,6 +183,28 @@ async function main() {
     console.log('OK PATCH rejects invalid transition to IN_AIR');
   } else {
     console.log('SKIP deep checks (no flights for UTC today — run npm run db:fix)');
+  }
+
+  const entHealth = await fetch(`${base}/api/operations/enterprise/health`, { headers: auth });
+  const entHealthBody = await entHealth.json().catch(() => ({}));
+  if (!entHealth.ok || entHealthBody.module !== 'flight-ops-enterprise') {
+    console.error('FAIL /api/operations/enterprise/health', entHealth.status, entHealthBody);
+    process.exit(1);
+  }
+  console.log('OK /api/operations/enterprise/health');
+
+  const entFeed = await fetch(`${base}/api/operations/enterprise/feed?date=${today}`, { headers: auth });
+  const entFeedBody = await entFeed.json().catch(() => ({}));
+  if (entFeed.status === 503) {
+    console.warn('WARN enterprise feed: schema not applied — run database/migrations/005_flight_ops_enterprise.sql');
+  } else if (!entFeed.ok || !Array.isArray(entFeedBody.flights)) {
+    console.error('FAIL /api/operations/enterprise/feed', entFeed.status, entFeedBody);
+    process.exit(1);
+  } else {
+    console.log('OK /api/operations/enterprise/feed', {
+      flights: entFeedBody.flights.length,
+      conflicts: entFeedBody.conflictCount
+    });
   }
 
   console.log('All operations API checks passed.');

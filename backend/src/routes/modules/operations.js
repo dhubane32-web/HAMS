@@ -16,6 +16,7 @@ import {
 import { recordOccFlightEvent, applyStatusWithTracking } from '../../services/occFlightEvents.js';
 import { logFinanceTransaction } from '../../services/financeLedger.js';
 import { registerOccRoutes } from './occ.js';
+import { registerFlightOpsEnterpriseRoutes } from './flight-ops-enterprise.js';
 
 const router = express.Router();
 
@@ -1782,5 +1783,6 @@ router.get(
 );
 
 registerOccRoutes(router);
+registerFlightOpsEnterpriseRoutes(router);
 
 export default router;

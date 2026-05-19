@@ -327,3 +327,397 @@
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
+
+/* Enterprise flight ops hub */
+.ops-enterprise {
+  overflow: hidden;
+}
+
+.ops-enterprise-head p {
+  margin: 0.25rem 0 0.75rem;
+  color: #64748b;
+  font-size: 0.88rem;
+  max-width: 52rem;
+}
+
+.ops-enterprise-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: flex-end;
+  margin-bottom: 0.75rem;
+}
+
+.ops-enterprise-toolbar label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #64748b;
+  text-transform: uppercase;
+}
+
+.ops-enterprise-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin: 0.5rem 0 0.75rem;
+}
+
+.ops-enterprise-flight-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  margin-bottom: 0.75rem;
+  padding: 0.5rem 0.65rem;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+}
+
+.ops-enterprise-flight-meta {
+  font-size: 0.82rem;
+  color: #475569;
+}
+
+.ops-enterprise-kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.ops-enterprise-kpis > div {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 0.45rem 0.55rem;
+}
+
+.ops-enterprise-kpis strong {
+  display: block;
+  font-size: 1.1rem;
+}
+
+.ops-enterprise-kpis span {
+  font-size: 0.7rem;
+  color: #64748b;
+  text-transform: uppercase;
+}
+
+.ops-enterprise-map-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 120px;
+  margin-bottom: 0.75rem;
+  border: 1px dashed #cbd5e1;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #f1f5f9 0%, #e2e8f0 100%);
+  color: #64748b;
+}
+
+.ops-enterprise-schema-hint {
+  padding: 0.5rem 0.65rem;
+  background: #fff7ed;
+  border: 1px solid #fdba74;
+  border-radius: 8px;
+  color: #9a3412;
+  font-size: 0.85rem;
+}
+
+.ops-enterprise-form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.ops-enterprise-form-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #64748b;
+}
+
+.ops-enterprise-timeline {
+  display: flex;
+  gap: 0.4rem;
+  overflow-x: auto;
+  padding: 0.5rem 0 0.75rem;
+  margin-bottom: 0.5rem;
+}
+
+.ops-timeline-block {
+  flex: 0 0 auto;
+  min-width: 140px;
+  padding: 0.45rem 0.55rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #fff;
+  text-align: left;
+  cursor: pointer;
+  font-size: 0.78rem;
+}
+
+.ops-timeline-fn {
+  display: block;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.ops-rotation-card {
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 0.65rem 0.75rem;
+  margin-bottom: 0.5rem;
+  background: #fff;
+}
+
+.ops-rotation-seq {
+  margin: 0.35rem 0 0;
+  padding-left: 1.1rem;
+  font-size: 0.84rem;
+}
+
+.ops-rotation-seq li {
+  margin-bottom: 0.35rem;
+}
+
+.ops-rotation-conflict {
+  color: #b91c1c;
+}
+
+.ops-row-selected {
+  background: #eff6ff !important;
+}
+
+.ops-pill {
+  display: inline-block;
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  background: #e2e8f0;
+}
+
+.ops-pill-delayed {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.ops-pill-cancelled {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.ops-muted {
+  color: #64748b;
+  font-size: 0.85rem;
+}
+
+.ops-turnaround-steps {
+  list-style: none;
+  padding: 0;
+  margin: 0.5rem 0 0;
+}
+
+.ops-turnaround-steps li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  padding: 0.4rem 0;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.ops-turnaround-steps li.done {
+  opacity: 0.65;
+}
+
+.ops-slot-list {
+  margin: 0.5rem 0 0;
+  padding-left: 1.1rem;
+  font-size: 0.85rem;
+}
+
+.ops-alert-sev-critical {
+  color: #b91c1c;
+}
+
+.ops-alert-sev-warning {
+  color: #b45309;
+}
+
+/* Drag scheduling board */
+.ops-drag-board {
+  margin-bottom: 0.75rem;
+}
+
+.ops-drag-ruler {
+  position: relative;
+  height: 1.25rem;
+  margin-bottom: 0.25rem;
+  font-size: 0.65rem;
+  color: #94a3b8;
+}
+
+.ops-drag-ruler span {
+  position: absolute;
+  transform: translateX(-50%);
+}
+
+.ops-drag-lane {
+  position: relative;
+  min-height: 88px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #f8fafc;
+  touch-action: none;
+}
+
+.ops-drag-block {
+  position: absolute;
+  top: 12px;
+  min-height: 56px;
+  padding: 0.35rem 0.4rem;
+  border: 1px solid #3b82f6;
+  border-radius: 6px;
+  background: #dbeafe;
+  cursor: grab;
+  overflow: hidden;
+}
+
+.ops-drag-block.selected {
+  border-color: #1d4ed8;
+  box-shadow: 0 0 0 2px #93c5fd;
+}
+
+.ops-drag-block.dragging {
+  opacity: 0.75;
+}
+
+.ops-drag-empty {
+  padding: 1rem;
+  text-align: center;
+  color: #64748b;
+  font-size: 0.85rem;
+}
+
+.ops-utilization-grid {
+  margin-bottom: 0.75rem;
+}
+
+.ops-util-bar {
+  display: grid;
+  grid-template-columns: 1fr minmax(80px, 40%) auto;
+  gap: 0.35rem;
+  align-items: center;
+  font-size: 0.8rem;
+  margin-bottom: 0.35rem;
+}
+
+.ops-util-track {
+  height: 8px;
+  background: #e2e8f0;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.ops-util-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #3b82f6, #2563eb);
+  border-radius: 4px;
+}
+
+.ops-ta-countdown {
+  padding: 0.45rem 0.6rem;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  font-size: 0.88rem;
+  margin: 0.5rem 0;
+}
+
+.ops-enterprise-conflicts ul,
+.ops-enterprise-dispatch-queue ul,
+.ops-enterprise-alerts ul {
+  margin: 0.35rem 0 0;
+  padding-left: 1.1rem;
+  font-size: 0.85rem;
+}
+
+.ops-weekday-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0.5rem 0;
+}
+
+.ops-compatible-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin: 0.5rem 0;
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.ops-compatible-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.45rem 0.55rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #fff;
+  text-align: left;
+  font-size: 0.82rem;
+  cursor: pointer;
+  width: 100%;
+}
+
+.ops-compatible-row.incompatible {
+  opacity: 0.65;
+  border-color: #fecaca;
+}
+
+.ops-compatible-row.selected {
+  border-color: #2563eb;
+  background: #eff6ff;
+}
+
+.ops-checklist-field {
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 0.5rem 0.65rem;
+  margin: 0.5rem 0;
+}
+
+.ops-checklist-field legend {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #64748b;
+}
+
+@media (max-width: 640px) {
+  .ops-enterprise-tabs button {
+    flex: 1 1 auto;
+    min-width: 0;
+    font-size: 0.78rem;
+    padding: 0.4rem 0.5rem;
+  }
+
+  .ops-drag-lane {
+    min-height: 120px;
+  }
+
+  .ops-util-bar {
+    grid-template-columns: 1fr;
+  }
+}

@@ -12,11 +12,16 @@
     "test:finance": "node scripts/verify-finance-api.mjs",
     "test:sales": "node scripts/verify-sales-api.mjs",
     "test:operations": "node scripts/verify-operations-api.mjs",
+    "test:flight-ops": "node scripts/verify-flight-ops-enterprise.mjs",
+    "seed:flight-ops": "bash scripts/seed-flight-ops-enterprise.sh",
+    "migrations:apply": "bash scripts/apply-pending-migrations.sh",
     "test:booking": "node scripts/verify-booking-api.mjs",
     "test:checkin": "node scripts/verify-checkin-api.mjs",
     "brand:extract-logo": "bash scripts/extract-hawana-logo-png.sh",
     "test:customer-service": "node scripts/verify-customer-service-api.mjs",
-    "security:audit": "node scripts/security-audit.mjs"
+    "security:audit": "node scripts/security-audit.mjs",
+    "preflight": "node scripts/railway-preflight.mjs",
+    "migrations:check": "node scripts/check-migrations-safe.mjs"
   },
   "dependencies": {
     "bcrypt": "^5.1.1",

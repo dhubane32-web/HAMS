@@ -55,6 +55,8 @@ export function OperationsOccHub() {
 
   const [delayCodes, setDelayCodes] = useState<{ code: string; label: string; default_cost_usd: number }[]>([]);
   const [dutyLimits, setDutyLimits] = useState<Record<string, unknown> | null>(null);
+  const [dutyLimitsError, setDutyLimitsError] = useState<string | null>(null);
+  const [dashError, setDashError] = useState<string | null>(null);
   const [liveRow, setLiveRow] = useState<{ flight: Record<string, unknown>; live: OccLive } | null>(null);
   const [rotation, setRotation] = useState<{ id: string; flight_number: string; departure_airport: string; arrival_airport: string; departure_time: string; status: string }[]>([]);
   const [timeline, setTimeline] = useState<OccEvent[]>([]);
@@ -95,18 +97,33 @@ export function OperationsOccHub() {
       }
     }
     if (!response.ok) {
-      throw new Error(body.message || 'Request failed.');
+      const detail = (body as { error?: string }).error;
+      const msg = body.message || 'Request failed.';
+      throw new Error(detail ? `${msg} (${detail})` : msg);
     }
     return body as T;
   }, []);
 
+  const [enterprisePulse, setEnterprisePulse] = useState<{
+    conflictCount: number;
+    openAlerts: number;
+    dispatchPending: number;
+  } | null>(null);
+
   const loadDashboard = useCallback(async () => {
     setDashLoading(true);
+    setDashError(null);
     try {
-      const d = await fetchJson<{ flights: DashboardFlight[] }>(`/api/operations/occ/dashboard?date=${encodeURIComponent(occDate)}`);
+      const d = await fetchJson<{
+        flights: DashboardFlight[];
+        enterprise?: { conflictCount: number; openAlerts: number; dispatchPending: number } | null;
+      }>(`/api/operations/occ/dashboard?date=${encodeURIComponent(occDate)}`);
       setDashboardFlights(d.flights || []);
+      setEnterprisePulse(d.enterprise ?? null);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Dashboard failed');
+      const msg = e instanceof Error ? e.message : 'Dashboard failed';
+      setDashError(msg);
+      toast.error(msg);
       setDashboardFlights([]);
     } finally {
       setDashLoading(false);
@@ -114,16 +131,28 @@ export function OperationsOccHub() {
   }, [fetchJson, occDate]);
 
   const loadRefs = useCallback(async () => {
+    setDutyLimitsError(null);
     try {
-      const [dc, dl] = await Promise.all([
-        fetchJson<{ delayCodes: { code: string; label: string; default_cost_usd: number }[] }>('/api/operations/occ/delay-codes'),
-        fetchJson<{ limits: Record<string, unknown> | null }>('/api/operations/occ/duty-limits')
-      ]);
+      const dc = await fetchJson<{ delayCodes: { code: string; label: string; default_cost_usd: number }[] }>(
+        '/api/operations/occ/delay-codes'
+      );
       setDelayCodes(dc.delayCodes || []);
-      setDutyLimits(dl.limits);
     } catch {
       setDelayCodes([]);
+    }
+    try {
+      const dl = await fetchJson<{ limits: Record<string, unknown> | null }>('/api/operations/occ/duty-limits');
+      setDutyLimits(dl.limits);
+      if (dl.limits) {
+        setDutyLimitsError(null);
+      } else {
+        setDutyLimitsError(
+          'Duty display limits are not in the database. Apply occ_control_center_v2.sql (includes occ_duty_limit_config) or run backend/scripts/apply-occ-migrations.sh.'
+        );
+      }
+    } catch (e) {
       setDutyLimits(null);
+      setDutyLimitsError(e instanceof Error ? e.message : 'Could not load duty limits.');
     }
   }, [fetchJson]);
 
@@ -289,6 +318,25 @@ export function OperationsOccHub() {
           legality, and the append-only flight timeline. Booking, check-in, crew assignments, maintenance, and finance
           refunds emit events into the same timeline.
         </p>
+        {dashError ? (
+          <div
+            role="alert"
+            style={{
+              marginBottom: '0.75rem',
+              padding: '0.65rem 0.85rem',
+              borderRadius: 8,
+              border: '1px solid #fecaca',
+              background: '#fef2f2',
+              color: '#991b1b',
+              fontSize: '0.85rem'
+            }}
+          >
+            <strong>OCC board unavailable.</strong> {dashError}{' '}
+            <button type="button" className="secondary" style={{ marginLeft: '0.35rem' }} onClick={() => void loadDashboard()}>
+              Retry
+            </button>
+          </div>
+        ) : null}
         <div className="ops-filters" style={{ marginBottom: '0.75rem' }}>
           <label>
             UTC ops date
@@ -301,6 +349,23 @@ export function OperationsOccHub() {
             Check-in / manifest
           </Link>
         </div>
+
+        {enterprisePulse && (
+          <div className="ops-enterprise-kpis" style={{ marginBottom: '0.75rem' }}>
+            <div>
+              <strong>{enterprisePulse.conflictCount}</strong>
+              <span>Conflicts</span>
+            </div>
+            <div>
+              <strong>{enterprisePulse.openAlerts}</strong>
+              <span>Open alerts</span>
+            </div>
+            <div>
+              <strong>{enterprisePulse.dispatchPending}</strong>
+              <span>Dispatch pending</span>
+            </div>
+          </div>
+        )}
 
         <div className="ops-table-wrap">
           <table className="ops-table">
@@ -368,8 +433,13 @@ export function OperationsOccHub() {
               <pre style={{ margin: 0, fontSize: '0.75rem', background: '#f8fafc', padding: '0.5rem', borderRadius: 6 }}>
                 {JSON.stringify(dutyLimits, null, 2)}
               </pre>
+            ) : dutyLimitsError ? (
+              <p style={{ margin: 0, fontSize: '0.8rem', color: '#b45309' }}>{dutyLimitsError}</p>
             ) : (
-              <p style={{ margin: 0, fontSize: '0.8rem', color: '#64748b' }}>Apply DB migrations (occ_duty_limit_config).</p>
+              <p style={{ margin: 0, fontSize: '0.8rem', color: '#64748b' }}>
+                No duty limits row yet. Apply <code style={{ fontSize: '0.75rem' }}>database/occ_control_center_v2.sql</code> or{' '}
+                <code style={{ fontSize: '0.75rem' }}>bash backend/scripts/apply-occ-migrations.sh</code>.
+              </p>
             )}
           </div>
         </div>

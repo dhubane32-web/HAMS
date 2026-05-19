@@ -92,7 +92,20 @@ occRouter.get('/dashboard', requireAuth, requireRoles(...ROLES_OPS_READ), async 
       ...row,
       live: deriveFlightLive(row)
     }));
-    return res.json({ date: dateStr, flights });
+    let enterprise = null;
+    try {
+      const { getRealtimeFeed } = await import('../../services/flightOpsEnterpriseEngine.js');
+      const feed = await getRealtimeFeed(dateStr);
+      enterprise = {
+        conflictCount: feed.conflictCount,
+        openAlerts: feed.alerts?.length || 0,
+        dispatchPending: (feed.dispatchQueue || []).filter((d) => d.needsRelease).length,
+        serverTime: feed.serverTime
+      };
+    } catch {
+      enterprise = null;
+    }
+    return res.json({ date: dateStr, flights, enterprise });
   } catch (e) {
     if (e?.code === '42703') {
       return res.status(503).json({
