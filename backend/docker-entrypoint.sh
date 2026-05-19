@@ -10,6 +10,9 @@ if [ -n "${DATABASE_URL:-}" ] && [ "${HAMS_RUN_MIGRATIONS_ON_START:-true}" = "tr
     else
       echo "[boot] WARN: migrations script returned non-zero (continuing start)."
     fi
+    if command -v node >/dev/null 2>&1; then
+      node scripts/audit-schema.mjs 2>/dev/null || echo "[boot] WARN: schema audit reported drift (see /health/schema)."
+    fi
     if bash scripts/apply-occ-migrations.sh 2>/dev/null; then
       echo "[boot] OCC schema ensured."
     else

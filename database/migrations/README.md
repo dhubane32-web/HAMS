@@ -22,6 +22,24 @@ This records each successfully applied file in `hams_schema_migrations` so re-ru
 
 `000_schema_migrations_bootstrap.sql` creates `hams_schema_migrations`. The apply script runs it once before scanning numbered files (and records `000_schema_migrations_bootstrap.sql` after success).
 
+## Production reconcile (008)
+
+`008_production_schema_reconcile.sql` is the **catch-up** migration for Railway drift. It re-applies (idempotently):
+
+- `001` — `sm_seat_leg_allocation`
+- `002` / `003` — `backup_logs`
+- `007` — OCC flight ETA / movement columns
+- `bookings.travel_agent_id` (+ rename from legacy `travelAgent_id`)
+- Minimum sales RM tables used by load-factor APIs
+
+Run manually after deploy if boot migrations were skipped:
+
+```bash
+export DATABASE_URL='postgresql://…'
+bash backend/scripts/apply-pending-migrations.sh
+node backend/scripts/audit-schema.mjs
+```
+
 ## Older one-off SQL
 
 Large module bootstraps (e.g. `database/occ_control_center.sql`) remain in `database/` and are documented in `DEPLOYMENT.md` / `docs/CONTINUOUS_DEPLOYMENT.md`. Prefer **new** incremental changes as numbered files under `migrations/` going forward.

@@ -2,6 +2,7 @@ import os from 'os';
 import { pool } from '../config/db.js';
 import { getBackupHealthSummary } from './backupService.js';
 import { getMonitoringSnapshot } from './monitoringService.js';
+import { auditSchema } from './schemaAuditService.js';
 
 const startedAt = Date.now();
 
@@ -42,7 +43,7 @@ export function getLiveness() {
 }
 
 /** Readiness — dependencies available. */
-export async function getReadiness() {
+export async function getReadiness({ includeSchema = true } = {}) {
   const checks = { database: { ok: false } };
   let ok = true;
   try {
@@ -52,6 +53,25 @@ export async function getReadiness() {
     ok = false;
     checks.database = { ok: false, error: 'unavailable' };
   }
+
+  if (includeSchema && checks.database.ok) {
+    try {
+      const schema = await auditSchema();
+      checks.schema = {
+        ok: schema.ok,
+        missingTables: schema.missingTables,
+        missingColumns: schema.missingColumns,
+        migrationCount: schema.migrationCount
+      };
+      if (!schema.ok && process.env.HAMS_SCHEMA_STRICT === 'true') {
+        ok = false;
+      }
+    } catch {
+      checks.schema = { ok: false, error: 'audit_failed' };
+      if (process.env.HAMS_SCHEMA_STRICT === 'true') ok = false;
+    }
+  }
+
   return {
     ok,
     service: 'HAMS backend',

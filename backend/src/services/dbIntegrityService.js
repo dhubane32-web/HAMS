@@ -1,6 +1,10 @@
 import { pool } from '../config/db.js';
+import { auditSchema } from './schemaAuditService.js';
+import { REQUIRED_TABLES } from './schemaRegistry.js';
 
-const CORE_TABLES = ['users', 'bookings', 'flights', 'audit_logs', 'backup_logs'];
+const CORE_TABLES = REQUIRED_TABLES.filter((t) =>
+  ['users', 'bookings', 'flights', 'audit_logs', 'backup_logs', 'sm_seat_leg_allocation'].includes(t)
+);
 
 /**
  * Lightweight integrity checks — non-destructive, safe on every deploy.
@@ -56,5 +60,20 @@ export async function runDbIntegrityChecks() {
     checks.push({ name: 'orphan_booking_users', ok: true, skipped: true });
   }
 
-  return { ok, checks, checkedAt: new Date().toISOString() };
+  let schema = null;
+  try {
+    schema = await auditSchema();
+    checks.push({
+      name: 'schema_audit',
+      ok: schema.ok,
+      missingTables: schema.missingTables,
+      missingColumns: schema.missingColumns
+    });
+    if (!schema.ok) ok = false;
+  } catch (err) {
+    checks.push({ name: 'schema_audit', ok: false, error: 'audit_failed' });
+    ok = false;
+  }
+
+  return { ok, checks, schema, checkedAt: new Date().toISOString() };
 }

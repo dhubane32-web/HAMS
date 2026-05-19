@@ -21,6 +21,15 @@ bash "$ROOT/backend/scripts/apply-occ-migrations.sh"
 echo ">>> 3. Schema verification"
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
 SELECT 'migrations' AS check, count(*)::text AS n FROM hams_schema_migrations;
+SELECT 'sm_seat_leg_allocation' AS check,
+  CASE WHEN to_regclass('public.sm_seat_leg_allocation') IS NOT NULL THEN 'OK' ELSE 'MISSING' END;
+SELECT 'backup_logs' AS check,
+  CASE WHEN to_regclass('public.backup_logs') IS NOT NULL THEN 'OK' ELSE 'MISSING' END;
+SELECT 'bookings.travel_agent_id' AS check,
+  CASE WHEN EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'bookings' AND column_name = 'travel_agent_id'
+  ) THEN 'OK' ELSE 'MISSING' END;
 SELECT 'eta_current_at' AS check,
   CASE WHEN EXISTS (
     SELECT 1 FROM information_schema.columns
@@ -31,6 +40,9 @@ SELECT 'commercial_notifications' AS check,
 SELECT 'flight_ops_enterprise' AS check,
   CASE WHEN to_regclass('public.flight_schedules') IS NOT NULL THEN 'OK' ELSE 'MISSING' END;
 SQL
+
+echo ">>> 3b. Node schema audit"
+node "$ROOT/backend/scripts/audit-schema.mjs" || true
 
 if [[ "${SEED_DEMO:-}" == "1" ]] || [[ "${SEED_DEMO:-}" == "true" ]]; then
   echo ">>> 4. Demo seed (commercial + enterprise)"

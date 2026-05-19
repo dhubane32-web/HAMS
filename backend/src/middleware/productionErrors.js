@@ -1,5 +1,6 @@
 import { logError } from '../lib/safeLog.js';
 import { logSystemEvent } from '../services/systemLogService.js';
+import { isPostgresSchemaError } from '../services/schemaAuditService.js';
 
 const isProd = process.env.NODE_ENV === 'production';
 
@@ -26,6 +27,12 @@ export function productionErrorHandler(err, req, res, _next) {
           path: (req?.originalUrl || req?.url || '').split('?')[0],
           status: safe
         }
+      });
+    }
+    if (safe >= 500 && isPostgresSchemaError(err)) {
+      return res.status(503).json({
+        message: 'Database schema out of sync. Apply pending migrations (008_production_schema_reconcile).',
+        code: err?.code
       });
     }
     return res.status(safe).json({ message: 'Request failed.' });
