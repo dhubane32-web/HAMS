@@ -45,6 +45,7 @@ import { getClientAuthToken, hydrateSessionFromCookie } from '@/lib/auth-session
 import { apiFetchJson } from '@/lib/api-client';
 import { OccPhase3Section } from '@/components/dashboard/occ-phase3';
 import type { OccPhase3 } from '@/components/dashboard/occ-phase3';
+import { buildOccDemoStateClient, resolveOccCommandCenter } from '@/lib/occ-demo-state';
 
 const MIX_COLORS = ['#0047AB', '#0EA5E9', '#16A34A', '#F59E0B', '#8B5CF6', '#DB2777'];
 
@@ -298,7 +299,10 @@ export default function DashboardPage() {
   const canOps = moduleRole && ['admin', 'super_admin', 'operations', 'maintenance'].includes(moduleRole as UserRole);
   const canOpsCommand =
     moduleRole && ['admin', 'super_admin', 'operations'].includes(moduleRole as UserRole);
-  const occPhase3 = ex?.occCommandCenter ?? ex?.occPhase3 ?? null;
+  const occPhase3Raw = ex?.occCommandCenter ?? ex?.occPhase3 ?? null;
+  const occPhase3 = canOpsCommand
+    ? resolveOccCommandCenter(occPhase3Raw, summary?.date ? `${summary.date}T12:00:00Z` : undefined)
+    : null;
   const showCommercialBelowOps = Boolean(canOpsCommand && occPhase3?.networkHealth);
   const canCs = moduleRole && ['admin', 'super_admin', 'customer_service', 'sales_manager', 'agent'].includes(moduleRole as UserRole);
 
@@ -375,8 +379,13 @@ export default function DashboardPage() {
           </div>
         </header>
 
-        {canOpsCommand && occPhase3 && (
-          <OccPhase3Section data={occPhase3} onRefresh={() => void load()} loading={refreshing} />
+        {canOpsCommand && (
+          <OccPhase3Section
+            data={occPhase3 ?? buildOccDemoStateClient()}
+            onRefresh={() => void load()}
+            loading={refreshing && !summary}
+            apiError={loadError || null}
+          />
         )}
 
         {loadError && (

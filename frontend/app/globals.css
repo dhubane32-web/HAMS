@@ -1592,6 +1592,17 @@ body.hams-drawer-open {
 .occ-feed-scroll {
   scrollbar-width: thin;
   scrollbar-color: #cbd5e1 transparent;
+  -webkit-overflow-scrolling: touch;
+}
+
+@media (max-width: 640px) {
+  .occ-feed-scroll table {
+    font-size: 0.75rem;
+  }
+  .occ-feed-scroll th,
+  .occ-feed-scroll td {
+    padding: 0.35rem 0.4rem;
+  }
 }
 
 .occ-plane-dot {

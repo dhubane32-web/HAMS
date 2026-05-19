@@ -24,23 +24,71 @@ type Props = {
   data: OccPhase3;
   onRefresh?: () => void;
   loading?: boolean;
+  apiError?: string | null;
 };
 
 function feedAlerts(data: OccPhase3) {
   return data.operationsFeed?.length ? data.operationsFeed : data.alerts ?? [];
 }
 
-export function OccPhase3Section({ data, onRefresh, loading }: Props) {
+function OccSkeleton() {
+  return (
+    <div className="space-y-4">
+      <div className="occ-glass h-28 animate-pulse rounded-2xl bg-slate-100" />
+      <div className="grid gap-4 xl:grid-cols-12">
+        <div className="occ-glass h-80 animate-pulse rounded-2xl bg-slate-100 xl:col-span-8" />
+        <div className="grid gap-4 xl:col-span-4">
+          <div className="occ-glass h-40 animate-pulse rounded-2xl bg-slate-100" />
+          <div className="occ-glass h-48 animate-pulse rounded-2xl bg-slate-100" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function OccPhase3Section({ data, onRefresh, loading, apiError }: Props) {
+  if (loading && !data?.networkHealth) {
+    return (
+      <section className="mb-8" aria-label="Airline operations command center">
+        <OccSkeleton />
+      </section>
+    );
+  }
+
+  const maintenance = data.maintenance ?? {
+    fleetHealthPct: null,
+    groundedCount: 0,
+    utilizationPct: null,
+    melAlerts: [],
+    inspectionCountdowns: [],
+    cards: []
+  };
   const health = data.networkHealth;
   const aircraftBoard = data.aircraftBoard ?? {
-    fleetHealthPct: data.maintenance.fleetHealthPct,
-    groundedCount: data.maintenance.groundedCount,
-    utilizationPct: data.maintenance.utilizationPct,
+    fleetHealthPct: maintenance.fleetHealthPct,
+    groundedCount: maintenance.groundedCount,
+    utilizationPct: maintenance.utilizationPct,
     aircraft: [],
-    melAlerts: data.maintenance.melAlerts,
-    cards: data.maintenance.cards
+    melAlerts: maintenance.melAlerts,
+    cards: maintenance.cards
   };
-  const crew = data.crewBoard ?? data.crew;
+  const crew = data.crewBoard ?? data.crew ?? {
+    onDuty: 0,
+    standby: 0,
+    legalityWarnings: [],
+    dutyHours: [],
+    assignmentGaps: 0,
+    restAlerts: 0,
+    pairingSummary: { complete: 0, open: 0, status: 'nominal' }
+  };
+  const analytics = data.analytics ?? {
+    otpTrend: [],
+    cancellationTrend: [],
+    delayMinutesTrend: [],
+    disruptionCategories: [],
+    todayLoadFactorPct: null,
+    todayUtilizationPct: null
+  };
 
   return (
     <section className="mb-8" aria-label="Airline operations command center">
@@ -57,6 +105,20 @@ export function OccPhase3Section({ data, onRefresh, loading }: Props) {
         </div>
         <LiveDataBadge updatedAt={data.updatedAt} onRefresh={onRefresh} loading={loading} />
       </div>
+
+      {(apiError || data.demoMode) && (
+        <p
+          className={`mb-3 rounded-xl border px-3 py-2 text-sm ${
+            apiError
+              ? 'border-amber-200 bg-amber-50 text-amber-950'
+              : 'border-sky-200 bg-sky-50 text-sky-900'
+          }`}
+          role={apiError ? 'alert' : 'status'}
+        >
+          {apiError ??
+            'Operational standby — no active departures today. Schedule flights to populate live OCC boards.'}
+        </p>
+      )}
 
       {health && (
         <CriticalOpsRibbon health={health} criticalAlerts={data.criticalAlerts ?? []} />
@@ -84,11 +146,11 @@ export function OccPhase3Section({ data, onRefresh, loading }: Props) {
       <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
         <AircraftStatusBoard board={aircraftBoard} />
         <CrewOpsPanel crew={crew} />
-        <MaintenanceIntelPanel maintenance={data.maintenance} />
+        <MaintenanceIntelPanel maintenance={maintenance} />
       </div>
 
       <div className="mt-4">
-        <ExecutiveOpsAnalytics analytics={data.analytics} />
+        <ExecutiveOpsAnalytics analytics={analytics} />
       </div>
     </section>
   );

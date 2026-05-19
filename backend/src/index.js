@@ -1,7 +1,7 @@
 import { pool } from './config/db.js';
-import { validateProductionEnv } from './config/envValidation.js';
+import { getConfig } from './config/index.js';
 
-validateProductionEnv();
+getConfig();
 
 import express from 'express';
 import cors from 'cors';
@@ -30,11 +30,21 @@ import { salesCommercialRouter } from './routes/modules/salesCommercialExtras.js
 import customerServiceRoutes from './routes/modules/customer-service.js';
 import reportsAnalyticsRoutes from './routes/modules/reports-analytics.js';
 import { startBackupScheduler } from './services/backupScheduler.js';
+import healthRouter from './routes/health.js';
+import { occPublicRouter } from './routes/modules/occ.js';
+import { requestMonitoring } from './middleware/requestMonitoring.js';
+import { logInfo, logError } from './lib/safeLog.js';
+import { registerGracefulShutdown } from './lib/gracefulShutdown.js';
+import { requestTimeout } from './middleware/requestTimeout.js';
+import { maintenanceMode } from './middleware/maintenanceMode.js';
+import { logSystemEvent } from './services/systemLogService.js';
+import { runDbIntegrityChecks } from './services/dbIntegrityService.js';
+import { sendOperationalAlert } from './services/alertService.js';
 
 const app = express();
-const PORT = process.env.PORT || 5013;
-
-const isProd = process.env.NODE_ENV === 'production';
+const cfg = getConfig();
+const PORT = cfg.port;
+const isProd = cfg.isProd;
 
 import {
   parseOrigins,
@@ -65,17 +75,26 @@ app.use(bearerFromCookie);
 app.use(trustedOriginMutations);
 app.use(express.json({ limit: '1mb' }));
 app.use(sanitizeBody);
+app.use(requestTimeout());
+app.use(requestMonitoring);
 
-async function healthHandler(_req, res) {
-  try {
-    res.status(200).json({ ok: true, service: 'HAMS backend' });
-  } catch (error) {
-    res.status(500).json({ ok: false, service: 'HAMS backend', message: isProd ? 'unhealthy' : error.message });
-  }
-}
+app.use(maintenanceMode);
 
-app.get('/health', healthHandler);
-app.get('/api/health', healthHandler);
+app.use('/health', healthRouter);
+app.get('/live', (req, res, next) => {
+  req.url = '/live';
+  healthRouter(req, res, next);
+});
+app.get('/ready', (req, res, next) => {
+  req.url = '/ready';
+  healthRouter(req, res, next);
+});
+app.get('/api/health', (req, res, next) => {
+  req.url = '/';
+  healthRouter(req, res, next);
+});
+
+app.use('/api/occ', occPublicRouter);
 
 app.use('/api/auth/forgot-password', authPasswordResetLimiter);
 app.use('/api/auth/reset-password', authPasswordResetLimiter);
@@ -106,31 +125,84 @@ app.use((_req, res) => {
 
 app.use(productionErrorHandler);
 
-async function start() {
-  try {
-    await pool.query('SELECT 1');
-    console.log('Database connection verified.');
-  } catch (err) {
-    console.error('FATAL: Database connection failed. Check DATABASE_URL in backend/.env');
-    console.error(err?.message || err);
-    process.exit(1);
+async function waitForDatabase(maxAttempts = 30, delayMs = 2000) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      await pool.query('SELECT 1');
+      logInfo('Database connection verified.');
+      return;
+    } catch (err) {
+      const msg = err?.message || String(err);
+      if (attempt >= maxAttempts) {
+        logError('FATAL: Database connection failed. Check DATABASE_URL.', err);
+        process.exit(1);
+      }
+      logInfo(`Database not ready (${attempt}/${maxAttempts})`);
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
   }
+}
 
+async function start() {
   const host = process.env.HOST || '0.0.0.0';
   const server = app.listen(PORT, host, () => {
-    console.log(`HAMS backend running on http://${host}:${PORT}`);
+    logInfo(`HAMS backend running on http://${host}:${PORT}`);
   });
-  startBackupScheduler();
+
+  registerGracefulShutdown(server);
+
+  // Listen before DB is ready so Railway /health can pass during Postgres cold start.
+  waitForDatabase()
+    .then(async () => {
+      const integrity = await runDbIntegrityChecks();
+      if (!integrity.ok) {
+        logError('DB integrity check reported issues', new Error('integrity warnings'));
+      }
+      await logSystemEvent({
+        level: 'info',
+        category: 'deployment',
+        action: 'STARTUP',
+        message: 'HAMS backend started',
+        metadata: { integrityOk: integrity.ok, port: PORT }
+      });
+      startBackupScheduler();
+    })
+    .catch((err) => {
+      logError('Startup failed after listen', err);
+      process.exit(1);
+    });
+
   server.on('error', (err) => {
     if (err && err.code === 'EADDRINUSE') {
-      console.error(
-        `FATAL: Port ${PORT} is already in use. Choose a free PORT in backend/.env and set frontend/.env.local NEXT_PUBLIC_API_URL to the same host/port. ` +
-          `On macOS, port 5000 is often used by AirPlay Receiver (System Settings → General → AirDrop & Handoff).`
+      logError(
+        `FATAL: Port ${PORT} is already in use.`,
+        err
       );
       process.exit(1);
     }
     throw err;
   });
 }
+
+process.on('unhandledRejection', (reason) => {
+  const err = reason instanceof Error ? reason : new Error(String(reason));
+  logError('unhandledRejection', err);
+  void sendOperationalAlert({
+    severity: 'critical',
+    title: 'Unhandled promise rejection',
+    message: err.message || 'unhandledRejection',
+    context: { name: err.name }
+  }).catch(() => {});
+});
+process.on('uncaughtException', (err) => {
+  logError('uncaughtException', err);
+  void sendOperationalAlert({
+    severity: 'critical',
+    title: 'Uncaught exception',
+    message: err?.message || 'uncaughtException',
+    context: { name: err?.name }
+  }).catch(() => {});
+  process.exit(1);
+});
 
 start();

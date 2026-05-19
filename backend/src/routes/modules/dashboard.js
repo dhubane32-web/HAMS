@@ -3,14 +3,56 @@ import { pool } from '../../config/db.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { userHasAnyRole } from '../../lib/roles.js';
 import { dateRangeToDepartureWindow, queryLoadFactorSnapshot } from '../../services/loadFactor.js';
+import { buildOccDemoPhase3 } from '../../lib/occDemoState.js';
 
 const router = express.Router();
 
 function emptyDashboardPayload(role, date) {
+  const updatedAt = new Date().toISOString();
+  const canOcc = userHasAnyRole(role, ['admin', 'super_admin', 'operations']);
+  const occPhase3 = canOcc ? buildOccDemoPhase3(updatedAt) : null;
   return {
     role,
     date,
-    executive: null,
+    executive: canOcc
+      ? {
+          kpis: {
+            bookingsToday: 0,
+            revenueToday: 0,
+            activeFlights: 0,
+            loadFactorPct: null,
+            checkInCompleted: 0,
+            delayedFlights: 0,
+            cancelledFlights: 0,
+            pendingPaymentsCount: 0,
+            pendingPaymentsAmount: 0
+          },
+          flightOperations: {
+            departuresToday: 0,
+            arrivalsToday: 0,
+            aircraftInService: 0,
+            aircraftOnHold: 0,
+            crewReadinessPct: null,
+            onTimePerformancePct: null,
+            statusBreakdown: {}
+          },
+          salesInsight: { topRoutes: [], agentSales: 0, directSales: 0, refundRequestsOpen: 0, outstandingBalances: 0 },
+          customerService: { openCases: 0, complaintsOpen: 0, lostBaggageOpen: 0, refundQueueOpen: 0 },
+          financeInsight: {
+            dailyNetCash: 0,
+            revenueTrend7d: [],
+            expenseMtd: 0,
+            profitMarginPct: null,
+            revenueMtd: 0,
+            refundsMtd: 0
+          },
+          operationalAlertsExtra: { crewDocumentsExpiring: 0, pendingPaymentsCount: 0 },
+          reportQuickLinks: [],
+          operationalIntel: null,
+          occPhase3,
+          occCommandCenter: occPhase3
+        }
+      : null,
     kpis: [],
     quickLinks: quickLinksForRole(role),
     alerts: [],
@@ -619,7 +661,11 @@ function buildOccPhase3({
   };
 
   const flightMovement = [...flightRows]
-    .sort((a, b) => new Date(a.departure_time).getTime() - new Date(b.departure_time).getTime())
+    .sort((a, b) => {
+      const ta = a.departure_time ? new Date(a.departure_time).getTime() : 0;
+      const tb = b.departure_time ? new Date(b.departure_time).getTime() : 0;
+      return ta - tb;
+    })
     .map((r) => {
       const st = String(r.status || '').toUpperCase();
       const isDelayed = st.includes('DELAY');
@@ -1337,8 +1383,10 @@ router.get('/summary', requireAuth, async (req, res) => {
     });
 
     const canOccPhase3 = userHasAnyRole(role, ['admin', 'super_admin', 'operations']);
-    const occPhase3 = canOccPhase3
-      ? buildOccPhase3({
+    let occPhase3 = null;
+    if (canOccPhase3) {
+      try {
+        occPhase3 = buildOccPhase3({
           flightRows: flightsTodayRes.rows,
           statusMap,
           delayedListRows: delayedListRes.rows,
@@ -1349,6 +1397,7 @@ router.get('/summary', requireAuth, async (req, res) => {
             departuresToday,
             delayedFlights,
             cancelledFlights,
+            activeFlights: activeDepartures,
             dispatchReleases,
             crewOnDuty,
             aircraftTotal,
@@ -1361,8 +1410,15 @@ router.get('/summary', requireAuth, async (req, res) => {
           crewOverview,
           crewExpirySoon,
           updatedAt
-        })
-      : null;
+        });
+      } catch (occErr) {
+        console.warn('[dashboard/summary] occPhase3 build failed, using demo state:', occErr?.message || occErr);
+        occPhase3 = buildOccDemoPhase3(updatedAt);
+      }
+      if (occPhase3 && !flightsTodayRes.rows.length && !delayedListRes.rows.length) {
+        occPhase3 = { ...buildOccDemoPhase3(updatedAt), ...occPhase3, demoMode: true };
+      }
+    }
 
     const executiveBoard = {
       kpis: {

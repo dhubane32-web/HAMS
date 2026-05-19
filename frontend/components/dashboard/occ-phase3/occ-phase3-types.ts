@@ -132,6 +132,7 @@ export type OccAnalytics = {
 
 export type OccPhase3 = {
   version?: number;
+  demoMode?: boolean;
   updatedAt: string;
   networkHealth: OccNetworkHealth;
   criticalAlerts: OccCriticalAlert[];

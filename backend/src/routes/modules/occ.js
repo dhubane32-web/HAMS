@@ -39,6 +39,31 @@ function deriveFlightLive(f) {
 
 const occRouter = express.Router();
 
+async function occStatusHandler(_req, res) {
+  try {
+    await pool.query('SELECT 1 AS ok');
+    return res.json({
+      status: 'healthy',
+      service: 'HAMS OCC',
+      database: 'connected',
+      timestamp: new Date().toISOString()
+    });
+  } catch (e) {
+    return res.status(503).json({
+      status: 'unhealthy',
+      service: 'HAMS OCC',
+      database: 'disconnected',
+      timestamp: new Date().toISOString(),
+      error: e?.message || 'database unavailable'
+    });
+  }
+}
+
+export const occPublicRouter = express.Router();
+occPublicRouter.get('/status', occStatusHandler);
+
+occRouter.get('/status', occStatusHandler);
+
 occRouter.get('/duty-limits', requireAuth, requireRoles(...ROLES_OPS_FLIGHT_DETAIL), async (_req, res) => {
   try {
     const r = await pool.query(`SELECT id, max_block_minutes, min_rest_minutes, max_duty_day_minutes, notes, updated_at FROM occ_duty_limit_config WHERE id = 1`);
@@ -69,6 +94,18 @@ occRouter.get('/dashboard', requireAuth, requireRoles(...ROLES_OPS_READ), async 
     }));
     return res.json({ date: dateStr, flights });
   } catch (e) {
+    if (e?.code === '42703') {
+      return res.status(503).json({
+        message: 'OCC flight columns missing (eta_current_at, actual_off_block_at, …). Apply database/occ_control_center.sql.',
+        error: e.message
+      });
+    }
+    if (e?.code === '42P01') {
+      return res.status(503).json({
+        message: 'OCC tables missing. Apply database/occ_control_center.sql then occ_control_center_v2.sql (or backend/scripts/apply-db-fixes.sh).',
+        error: e.message
+      });
+    }
     return res.status(500).json({ message: 'Failed to load OCC dashboard.', error: e.message });
   }
 });
