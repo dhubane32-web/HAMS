@@ -7,13 +7,19 @@
 #   bash backend/scripts/apply-pending-migrations.sh
 #
 set -euo pipefail
-ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+if [[ -n "${HAMS_DATABASE_DIR:-}" ]] && [[ -d "${HAMS_DATABASE_DIR}/migrations" ]]; then
+  DB_ROOT="${HAMS_DATABASE_DIR%/}"
+  ROOT="$(cd "$DB_ROOT/.." && pwd)"
+else
+  ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+  DB_ROOT="$ROOT/database"
+fi
 if [[ -z "${DATABASE_URL:-}" ]]; then
   echo "Set DATABASE_URL, then re-run." >&2
   exit 1
 fi
 
-MIG_DIR="$ROOT/database/migrations"
+MIG_DIR="$DB_ROOT/migrations"
 BOOT="$MIG_DIR/000_schema_migrations_bootstrap.sql"
 
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$BOOT"
@@ -42,9 +48,9 @@ for f in "$MIG_DIR"/[0-9][0-9][0-9]_*.sql; do
   fi
   echo "[migrations] apply $base"
   if [[ "$base" == "005_flight_ops_enterprise.sql" ]]; then
-    psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$ROOT/database/flight_ops_enterprise.sql"
+    psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$DB_ROOT/flight_ops_enterprise.sql"
   elif [[ "$base" == "006_commercial_core_phase2.sql" ]]; then
-    psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$ROOT/database/commercial_core_phase2.sql"
+    psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$DB_ROOT/commercial_core_phase2.sql"
   else
     psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$f"
   fi

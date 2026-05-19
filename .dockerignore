@@ -1,0 +1,10 @@
+node_modules
+frontend
+.git
+.cursor
+**/.env
+backend/var
+backend/backups
+**/*.enc
+hamitravel-backoffice
+hami-backoffice-static

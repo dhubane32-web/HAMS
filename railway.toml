@@ -1,0 +1,16 @@
+# Railway — MUST build from repository ROOT (not backend/) so Dockerfile includes database/.
+# Dashboard: Service → Settings → Root Directory = empty or "/"
+#            Dockerfile path = Dockerfile (repo root)
+#
+# On each deploy, docker-entrypoint.sh applies pending migrations then starts the API.
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+healthcheckPath = "/health/live"
+healthcheckTimeout = 300
+healthcheckStartPeriod = 180
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 5
