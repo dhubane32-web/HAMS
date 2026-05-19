@@ -6,9 +6,16 @@ export type AppModule =
   | 'dashboard'
   | 'booking'
   | 'checkin'
+  | 'commercial'
+  | 'occ'
+  | 'dispatch'
+  | 'live-flights'
   | 'operations'
+  | 'crew-control'
   | 'crew'
   | 'maintenance'
+  | 'revenue'
+  | 'safety'
   | 'finance'
   | 'sales'
   | 'customers'
@@ -23,10 +30,17 @@ export function pathnameToModule(pathname: string): AppModule {
   if (!pathname || pathname === '/') return 'dashboard';
   if (pathname.startsWith('/dashboard')) return 'dashboard';
   if (pathname.startsWith('/bookings') || pathname.startsWith('/booking')) return 'booking';
+  if (pathname.startsWith('/commercial')) return 'commercial';
   if (pathname.startsWith('/checkin')) return 'checkin';
+  if (pathname.startsWith('/occ')) return 'occ';
+  if (pathname.startsWith('/dispatch')) return 'dispatch';
+  if (pathname.startsWith('/live-flights')) return 'live-flights';
   if (pathname.startsWith('/operations') || pathname.startsWith('/flights')) return 'operations';
+  if (pathname.startsWith('/crew-control')) return 'crew-control';
   if (pathname.startsWith('/crew-management') || pathname.startsWith('/crew')) return 'crew';
   if (pathname.startsWith('/maintenance')) return 'maintenance';
+  if (pathname.startsWith('/revenue')) return 'revenue';
+  if (pathname.startsWith('/safety')) return 'safety';
   if (pathname.startsWith('/finance') || pathname.startsWith('/add-expense')) return 'finance';
   if (pathname.startsWith('/sales') || pathname.startsWith('/sales-marketing')) return 'sales';
   if (pathname.startsWith('/customer-service') || pathname.startsWith('/customers')) return 'customers';
@@ -42,10 +56,17 @@ export function pathnameToModule(pathname: string): AppModule {
 const ALL_MODULES: AppModule[] = [
   'dashboard',
   'booking',
+  'commercial',
   'checkin',
+  'occ',
+  'dispatch',
+  'live-flights',
   'operations',
+  'crew-control',
   'crew',
   'maintenance',
+  'revenue',
+  'safety',
   'finance',
   'sales',
   'customers',
@@ -57,6 +78,18 @@ const ALL_MODULES: AppModule[] = [
   'system-settings'
 ];
 
+const OPS_MODULES: AppModule[] = [
+  'dashboard',
+  'occ',
+  'dispatch',
+  'live-flights',
+  'operations',
+  'crew-control',
+  'reports',
+  'notifications',
+  'workspace'
+];
+
 /** Modules a role may open (Super Admin uses full list via admin branch). */
 export function allowedModulesForRole(role: UserRole | null): AppModule[] {
   if (!role) return ['dashboard'];
@@ -65,25 +98,26 @@ export function allowedModulesForRole(role: UserRole | null): AppModule[] {
     case 'admin':
       return ALL_MODULES;
     case 'booking_agent':
-      return ['dashboard', 'booking', 'notifications', 'workspace'];
+      return ['dashboard', 'booking', 'commercial', 'notifications', 'workspace'];
     case 'checkin_agent':
       return ['dashboard', 'checkin', 'notifications', 'workspace'];
     case 'finance':
-      return ['dashboard', 'finance', 'notifications', 'workspace'];
+      return ['dashboard', 'finance', 'revenue', 'reports', 'notifications', 'workspace'];
     case 'operations':
-      return ['dashboard', 'operations', 'notifications', 'workspace'];
+      return OPS_MODULES;
     case 'crew':
-      return ['dashboard', 'crew', 'notifications', 'workspace'];
+      return ['dashboard', 'crew', 'crew-control', 'notifications', 'workspace'];
     case 'maintenance':
-      return ['dashboard', 'maintenance', 'notifications', 'workspace'];
+      return ['dashboard', 'maintenance', 'safety', 'notifications', 'workspace'];
     case 'sales_manager':
-      return ['dashboard', 'sales', 'notifications', 'workspace'];
+      return ['dashboard', 'sales', 'revenue', 'reports', 'notifications', 'workspace'];
     case 'customer_service':
       return ['dashboard', 'customers', 'notifications', 'workspace'];
     case 'agent':
       return [
         'dashboard',
         'booking',
+        'commercial',
         'checkin',
         'customers',
         'sales',

@@ -509,7 +509,7 @@ export default function SalesPage() {
   return (
     <main className="module-page">
       <section className="module-card">
-        <h1>Sales &amp; marketing</h1>
+        <h1>Commercial &amp; revenue</h1>
         <p style={{ margin: 0, color: '#64748b', fontSize: '0.85rem' }}>
           Hawana Airways Management System (HAMS) commercial stack: revenue management signals, multi-channel
           distribution, corporate and agency programs, loyalty, ancillaries, automation rules, and executive KPIs — wired

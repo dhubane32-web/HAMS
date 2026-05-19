@@ -12,7 +12,13 @@ import {
   BarChart3,
   Settings,
   ShieldCheck,
-  Wrench
+  Wrench,
+  Radar,
+  Radio,
+  Activity,
+  UserCog,
+  TrendingUp,
+  ShieldAlert
 } from 'lucide-react';
 import type { UserRole } from '@/lib/roles';
 
@@ -29,10 +35,11 @@ const CUSTOMERS: UserRole[] = ['super_admin', 'admin', 'customer_service'];
 const REPORTS: UserRole[] = ['super_admin', 'admin', 'finance', 'operations', 'sales_manager', 'agent'];
 const SETTINGS: UserRole[] = ['super_admin', 'admin'];
 const MAINT: UserRole[] = ['super_admin', 'admin', 'maintenance'];
+const REVENUE: UserRole[] = ['super_admin', 'admin', 'sales_manager', 'finance'];
+const SAFETY: UserRole[] = ['super_admin', 'admin', 'operations', 'maintenance'];
 
 /**
- * Primary airline ERP sidebar — order matches operations dashboard tiles.
- * Paths align with `erpModuleTilesForRole` in `dashboard-modules.ts`.
+ * Primary airline ERP sidebar — enterprise ops modules first for operations roles.
  */
 export const navItems: NavItem[] = [
   {
@@ -72,10 +79,34 @@ export const navItems: NavItem[] = [
     roles: CHECKIN
   },
   {
+    href: '/occ',
+    label: 'Operations Control Center',
+    icon: Radar,
+    roles: OPS
+  },
+  {
+    href: '/live-flights',
+    label: 'Live Flight Tracking',
+    icon: Activity,
+    roles: OPS
+  },
+  {
+    href: '/dispatch',
+    label: 'Flight Dispatch',
+    icon: Radio,
+    roles: OPS
+  },
+  {
     href: '/operations',
     label: 'Flight Operations',
     icon: SlidersHorizontal,
     roles: OPS
+  },
+  {
+    href: '/crew-control',
+    label: 'Crew Control',
+    icon: UserCog,
+    roles: [...OPS, 'crew']
   },
   {
     href: '/maintenance',
@@ -90,6 +121,12 @@ export const navItems: NavItem[] = [
     roles: CREW
   },
   {
+    href: '/revenue',
+    label: 'Revenue Management',
+    icon: TrendingUp,
+    roles: REVENUE
+  },
+  {
     href: '/finance',
     label: 'Finance & Accounting',
     icon: Wallet,
@@ -97,15 +134,21 @@ export const navItems: NavItem[] = [
   },
   {
     href: '/sales',
-    label: 'Sales & Marketing',
+    label: 'Commercial & Revenue',
     icon: Megaphone,
     roles: SALES
   },
   {
     href: '/customers',
-    label: 'Customer Service',
+    label: 'Passenger Services',
     icon: Headset,
     roles: CUSTOMERS
+  },
+  {
+    href: '/safety',
+    label: 'Safety & Compliance',
+    icon: ShieldAlert,
+    roles: SAFETY
   },
   {
     href: '/reports',
@@ -139,5 +182,7 @@ export function isNavActive(pathname: string, href: string): boolean {
   if (href === '/booking' && pathname.startsWith('/bookings')) return true;
   if (href === '/settings' && pathname.startsWith('/settings-master-data')) return true;
   if (href === '/maintenance' && pathname.startsWith('/maintenance')) return true;
+  if (href === '/customers' && pathname.startsWith('/customer-service')) return true;
+  if (href === '/occ' && pathname.startsWith('/occ')) return true;
   return pathname.startsWith(`${href}/`);
 }

@@ -66,7 +66,7 @@ type OccEvent = {
   created_by: string | null;
 };
 
-export function OperationsOccHub() {
+export function OperationsOccHub({ embedded = false }: { embedded?: boolean } = {}) {
   const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
   const [occDate, setOccDate] = useState(today);
   const [dashboardFlights, setDashboardFlights] = useState<DashboardFlight[]>([]);
@@ -361,12 +361,16 @@ export function OperationsOccHub() {
   return (
     <div className={occDark ? 'occ-hub occ-hub--dark' : 'occ-hub'}>
       <section className="module-card">
-        <h2>OCC Control Center</h2>
-        <p style={{ marginTop: 0, color: '#64748b', fontSize: '0.88rem', maxWidth: '48rem' }}>
-          Day-wide operational picture with live phase, ETA, rotation, fuel, loadsheet, IROPS, slots, station control, crew
-          legality, and the append-only flight timeline. Booking, check-in, crew assignments, maintenance, and finance
-          refunds emit events into the same timeline.
-        </p>
+        {!embedded ? (
+          <>
+            <h2>OCC Control Center</h2>
+            <p style={{ marginTop: 0, color: '#64748b', fontSize: '0.88rem', maxWidth: '48rem' }}>
+              Day-wide operational picture with live phase, ETA, rotation, fuel, loadsheet, IROPS, slots, station control,
+              crew legality, and the append-only flight timeline. Booking, check-in, crew assignments, maintenance, and
+              finance refunds emit events into the same timeline.
+            </p>
+          </>
+        ) : null}
         {dashError ? (
           <div
             role="alert"
@@ -391,6 +395,7 @@ export function OperationsOccHub() {
             {schemaNote}
           </p>
         ) : null}
+        {!embedded ? (
         <div className="ops-filters occ-toolbar" style={{ marginBottom: '0.75rem' }}>
           <label>
             UTC ops date
@@ -421,8 +426,9 @@ export function OperationsOccHub() {
             Check-in / manifest
           </Link>
         </div>
+        ) : null}
 
-        {enterprisePulse && (
+        {!embedded && enterprisePulse && (
           <div className="ops-enterprise-kpis" style={{ marginBottom: '0.75rem' }}>
             <div>
               <strong>{enterprisePulse.conflictCount}</strong>

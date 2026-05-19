@@ -198,7 +198,43 @@ export default function MaintenancePage() {
   return (
     <main style={{ padding: '2rem', display: 'grid', gap: '1rem' }}>
       <h1 style={{ margin: 0, color: '#0d47a1' }}>Aircraft Maintenance</h1>
-      <p style={{ marginTop: 0 }}>Defect logging, inspection scheduling, release status, and maintenance history.</p>
+      <p style={{ marginTop: 0 }}>
+        MEL/CDL, deferred defects, AOG tracking, inspections, technical logbook, and fleet serviceability.
+      </p>
+
+      <section style={cardStyle}>
+        <h2 style={h2Style}>Fleet serviceability</h2>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: '0.5rem' }}>
+          {aircraft.map((a) => {
+            const st = String(a.release_status || '').toUpperCase();
+            const tone =
+              st === 'RELEASED'
+                ? { bg: '#dcfce7', border: '#86efac', label: 'Serviceable' }
+                : st === 'HOLD'
+                  ? { bg: '#fee2e2', border: '#fca5a5', label: 'AOG / Hold' }
+                  : st === 'IN_MAINTENANCE'
+                    ? { bg: '#fef3c7', border: '#fcd34d', label: 'Maintenance' }
+                    : { bg: '#f1f5f9', border: '#cbd5e1', label: st || 'Unknown' };
+            return (
+              <div
+                key={a.id}
+                style={{
+                  padding: '0.5rem',
+                  borderRadius: 8,
+                  border: `1px solid ${tone.border}`,
+                  background: tone.bg,
+                  fontSize: '0.78rem'
+                }}
+              >
+                <strong>{a.tail_number}</strong>
+                <div>{a.model}</div>
+                <motion.div style={{ marginTop: 4, fontWeight: 700 }}>{tone.label}</div>
+              </div>
+            );
+          })}
+        </div>
+        {aircraft.length === 0 ? <p style={{ color: '#64748b', fontSize: '0.85rem' }}>No aircraft in master data.</p> : null}
+      </section>
 
       <section style={cardStyle}>
         <h2 style={h2Style}>1) Aircraft Control</h2>

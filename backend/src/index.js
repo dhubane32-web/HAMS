@@ -31,6 +31,7 @@ import customerServiceRoutes from './routes/modules/customer-service.js';
 import reportsAnalyticsRoutes from './routes/modules/reports-analytics.js';
 import commercialRoutes from './routes/modules/commercial.js';
 import enterpriseOpsRoutes from './routes/modules/enterprise-ops.js';
+import safetyRoutes from './routes/modules/safety.js';
 import { ensureOccEtaColumns } from './lib/occFlightColumns.js';
 import { startBackupScheduler } from './services/backupScheduler.js';
 import healthRouter from './routes/health.js';
@@ -123,6 +124,7 @@ app.use('/api/sales', salesRoutes);
 app.use('/api/customer-service', customerServiceRoutes);
 app.use('/api/reports-analytics', reportsAnalyticsRoutes);
 app.use('/api/commercial', commercialRoutes);
+app.use('/api/safety', safetyRoutes);
 
 app.use((_req, res) => {
   res.status(404).json({ message: 'Not found.' });

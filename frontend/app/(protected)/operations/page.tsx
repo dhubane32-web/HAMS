@@ -1036,6 +1036,24 @@ export default function OperationsPage() {
     <main className="module-page ops-shell-page">
       <section className="module-card">
         <h1>Flight Operations</h1>
+        <div
+          style={{
+            margin: '0 0 0.75rem',
+            padding: '0.55rem 0.75rem',
+            borderRadius: 8,
+            border: '1px solid #bae6fd',
+            background: '#f0f9ff',
+            fontSize: '0.82rem',
+            color: '#0c4a6e'
+          }}
+        >
+          <strong>Enterprise OCC</strong> now has a dedicated module:{' '}
+          <a href="/occ" style={{ fontWeight: 700 }}>
+            Operations Control Center
+          </a>
+          , plus <a href="/dispatch">Flight Dispatch</a> and <a href="/live-flights">Live tracking</a>. Tabs below remain
+          for schedule, control, and legacy workflows.
+        </div>
         <p style={{ marginTop: 0, color: '#64748b', maxWidth: '52rem' }}>
           Airline-style OCC: status workflow, dispatch release checklist, load snapshot, crew roles with overlap protection,
           delay capture with revised times, operational alerts, and audit timeline per flight.

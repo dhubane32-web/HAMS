@@ -1,0 +1,188 @@
+/* Enterprise airline operations — OCC / IOC styling layer */
+
+.aep-shell {
+  --aep-bg: #0b1220;
+  --aep-surface: #111827;
+  --aep-surface-2: #1e293b;
+  --aep-border: #334155;
+  --aep-text: #e2e8f0;
+  --aep-muted: #94a3b8;
+  --aep-accent: #38bdf8;
+  --aep-ok: #22c55e;
+  --aep-warn: #f59e0b;
+  --aep-crit: #ef4444;
+}
+
+.aep-shell--dark {
+  color: var(--aep-text);
+}
+
+.aep-shell--dark .module-card {
+  background: var(--aep-surface);
+  border-color: var(--aep-border);
+  color: var(--aep-text);
+}
+
+.aep-hero {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+  padding: 0.85rem 1rem;
+  border-radius: 12px;
+  border: 1px solid var(--aep-border, #e2e8f0);
+  background: linear-gradient(135deg, #0f172a 0%, #1e3a5f 55%, #0f172a 100%);
+  color: #f8fafc;
+}
+
+.aep-hero h1 {
+  margin: 0;
+  font-size: 1.35rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+}
+
+.aep-hero p {
+  margin: 0.25rem 0 0;
+  font-size: 0.85rem;
+  color: #cbd5e1;
+  max-width: 42rem;
+}
+
+.aep-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.aep-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin: 0.75rem 0 1rem;
+}
+
+.aep-tabs button {
+  font-size: 0.78rem;
+  padding: 0.4rem 0.65rem;
+  border-radius: 8px;
+}
+
+.aep-alert-ticker {
+  overflow: hidden;
+  border-radius: 8px;
+  border: 1px solid rgba(248, 113, 113, 0.35);
+  background: rgba(127, 29, 29, 0.35);
+  margin-bottom: 0.75rem;
+}
+
+.aep-alert-ticker__track {
+  display: flex;
+  gap: 2rem;
+  padding: 0.45rem 0.75rem;
+  animation: aep-ticker 28s linear infinite;
+  white-space: nowrap;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #fecaca;
+}
+
+@keyframes aep-ticker {
+  0% {
+    transform: translateX(0);
+  }
+  100% {
+    transform: translateX(-50%);
+  }
+}
+
+.aep-flight-strips {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.aep-flight-strip {
+  border-radius: 10px;
+  border: 1px solid var(--aep-border, #e2e8f0);
+  padding: 0.55rem 0.65rem;
+  background: var(--aep-surface-2, #f8fafc);
+  font-size: 0.78rem;
+  transition: box-shadow 0.15s ease;
+}
+
+.aep-flight-strip:hover {
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.12);
+}
+
+.aep-flight-strip--delayed {
+  border-color: #f87171;
+  background: rgba(254, 226, 226, 0.25);
+}
+
+.aep-flight-strip--airborne {
+  border-color: #38bdf8;
+}
+
+.aep-flight-strip strong {
+  display: block;
+  font-size: 0.92rem;
+}
+
+.aep-kpi-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.aep-kpi {
+  border-radius: 10px;
+  border: 1px solid var(--aep-border, #e2e8f0);
+  padding: 0.5rem 0.6rem;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.aep-kpi strong {
+  display: block;
+  font-size: 1.15rem;
+}
+
+.aep-kpi span {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--aep-muted, #64748b);
+}
+
+.aep-live-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--aep-ok);
+  animation: aep-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes aep-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@media (max-width: 640px) {
+  .aep-flight-strips {
+    grid-template-columns: 1fr;
+  }
+
+  .aep-hero h1 {
+    font-size: 1.1rem;
+  }
+}

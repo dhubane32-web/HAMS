@@ -334,7 +334,7 @@ export default function CustomerServicePage() {
 
   return (
     <main className="module-page">
-      <DocumentHeader documentTitle="Customer Service" className="mb-6" />
+      <DocumentHeader documentTitle="Passenger Services" className="mb-6" />
       <section className="module-card">
         <p style={{ margin: 0, color: '#64748b', fontSize: '0.85rem' }}>
           Service cases tied to passengers and bookings, passenger history and profiles, internal notes, lost baggage
