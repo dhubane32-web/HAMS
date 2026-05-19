@@ -1,10 +1,17 @@
-# Railway — deploy from repo root: railway up --service hams-api (after `cd backend` or set root)
+# Railway — deploy from GitHub `main` (backend service root) or: cd backend && railway up
+# Enterprise flight ops (2026-05): requires deploy after migration 005 on Postgres.
+#
+# Pre-deploy policy (see docs/PRODUCTION_SECURITY.md):
+#   node scripts/predeploy-check.mjs --target railway
+#   Optional: trigger super-admin backup (POST /api/system/backup/run) before schema migrations
 [build]
 builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"
 
 [deploy]
-healthcheckPath = "/health"
+healthcheckPath = "/health/live"
 healthcheckTimeout = 300
+# Allow Node boot + Postgres plugin attach before marking deploy healthy.
+healthcheckStartPeriod = 120
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 5
